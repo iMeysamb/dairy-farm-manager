@@ -1,6 +1,10 @@
 package com.example.dairyfarmmanager
 
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -34,6 +38,7 @@ import androidx.compose.material.icons.filled.LocalDrink
 import androidx.compose.material.icons.filled.Money
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -86,10 +91,24 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private const val ALARM_ACTION = "com.example.dairyfarmmanager.DAILY_ALARM"
+private const val ALARM_REQUEST_CODE = 2001
+
+private class DailyAlarmReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        val preferences = context.getSharedPreferences("farm_data", Context.MODE_PRIVATE)
+        if (!preferences.getBoolean("alarm_enabled", false)) return
+        showAlarmNotification(
+            context,
+            preferences.getString("alarm_message", "یادآوری مدیریت گاوداری") ?: "یادآوری مدیریت گاوداری"
+        )
+    }
+}
+
 private enum class Screen(val title: String) {
     Dashboard("داشبورد"), Animals("دام‌ها"), Milk("تولید شیر"), Finance("مالی"),
     Employees("کارکنان"), Reports("گزارش‌ها"), Calendar("برنامه‌ریزی"), Health("سلامت"),
-    Inventory("انبارداری"), Sales("فروش محصولات")
+    Inventory("انبارداری"), Sales("فروش محصولات"), Alerts("تنظیم هشدار")
 }
 
 private data class FarmData(
@@ -391,6 +410,7 @@ private fun DairyFarmApp() {
                         onDelete = { id -> requestDelete("این تراکنش انبار") { update { value -> value.copy(inventoryList = value.inventoryList.filterNot { item -> item.id == id }) } } }
                     )
                     Screen.Sales -> Sales(data, onAdd = { invoiceEditor = null; showInvoiceEditor = true }, onEdit = { invoiceEditor = it; showInvoiceEditor = true }, onDelete = { id -> requestDelete("این فاکتور") { update { value -> val list = value.invoiceList.filterNot { item -> item.id == id }; value.copy(invoiceList = list, invoices = list.size, lastInvoiceCode = list.lastOrNull()?.code ?: "") } } })
+                    Screen.Alerts -> AlertSettings(context)
                 }
                 if (screen != Screen.Dashboard) {
                     OutlinedButton(onClick = { screen = Screen.Dashboard }, modifier = Modifier.fillMaxWidth()) {
@@ -533,6 +553,10 @@ private fun Dashboard(data: FarmData, onOpen: (Screen) -> Unit) {
         Icon(Icons.Default.BarChart, contentDescription = null)
         Text("  مشاهده گزارش ماهانه شیر")
     }
+    Button(onClick = { onOpen(Screen.Alerts) }, modifier = Modifier.fillMaxWidth()) {
+        Icon(Icons.Default.Alarm, contentDescription = null)
+        Text("  تنظیم هشدار")
+    }
     val screens = listOf(
         Screen.Animals to ("دام‌ها و گوساله‌ها" to Icons.Default.Pets),
         Screen.Milk to ("ثبت تولید شیر" to Icons.Default.LocalDrink),
@@ -642,6 +666,63 @@ private fun Reports(data: FarmData) {
     }
 }
 
+
+@Composable
+private fun AlertSettings(context: Context) {
+    val preferences = context.getSharedPreferences("farm_data", Context.MODE_PRIVATE)
+    var enabled by remember { mutableStateOf(preferences.getBoolean("alarm_enabled", false)) }
+    var hour by remember { mutableStateOf(preferences.getInt("alarm_hour", 8).toString()) }
+    var minute by remember { mutableStateOf(preferences.getInt("alarm_minute", 0).toString().padStart(2, '0')) }
+    var message by remember { mutableStateOf(preferences.getString("alarm_message", "یادآوری مدیریت گاوداری") ?: "یادآوری مدیریت گاوداری") }
+    var saved by remember { mutableStateOf(false) }
+    DetailHeader("تنظیم هشدار", "برای دریافت یادآوری روزانه زمان و متن هشدار را تنظیم کنید")
+    SectionCard("هشدار روزانه", Icons.Default.Alarm) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+            Column { Text("فعال‌سازی آلارم", fontWeight = FontWeight.Bold); Text("هر روز در زمان تعیین‌شده اعلان نمایش داده می‌شود", fontSize = 12.sp, color = Color(0xFF64748B)) }
+            Switch(checked = enabled, onCheckedChange = { enabled = it; saved = false })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = hour,
+                onValueChange = { hour = it.filter(Char::isDigit).take(2); saved = false },
+                label = { Text("ساعت") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                value = minute,
+                onValueChange = { minute = it.filter(Char::isDigit).take(2); saved = false },
+                label = { Text("دقیقه") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        OutlinedTextField(
+            value = message,
+            onValueChange = { message = it; saved = false },
+            label = { Text("متن هشدار") },
+            singleLine = false,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(onClick = {
+            val validHour = hour.toIntOrNull()?.coerceIn(0, 23) ?: 8
+            val validMinute = minute.toIntOrNull()?.coerceIn(0, 59) ?: 0
+            preferences.edit()
+                .putBoolean("alarm_enabled", enabled)
+                .putInt("alarm_hour", validHour)
+                .putInt("alarm_minute", validMinute)
+                .putString("alarm_message", message.ifBlank { "یادآوری مدیریت گاوداری" })
+                .apply()
+            if (enabled) scheduleDailyAlarm(context, validHour, validMinute) else cancelDailyAlarm(context)
+            hour = validHour.toString()
+            minute = validMinute.toString().padStart(2, '0')
+            saved = true
+        }, modifier = Modifier.fillMaxWidth()) { Text("ذخیره تنظیمات هشدار") }
+        if (saved) Text("تنظیمات هشدار ذخیره شد", color = Color(0xFF15803D))
+    }
+}
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MonthlyMilkReport(data: FarmData) {
@@ -1110,6 +1191,60 @@ private fun notifyFarmAlerts(context: Context, data: FarmData) {
         NotificationManagerCompat.from(context).notify(1001, notification)
     } catch (_: SecurityException) {
         // Permission request is handled by MainActivity on Android 13+.
+    }
+}
+
+private fun alarmPendingIntent(context: Context): PendingIntent {
+    val intent = Intent(context, DailyAlarmReceiver::class.java).setAction(ALARM_ACTION)
+    return PendingIntent.getBroadcast(
+        context,
+        ALARM_REQUEST_CODE,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+}
+
+private fun scheduleDailyAlarm(context: Context, hour: Int, minute: Int) {
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val nextAlarm = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+        if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
+    }
+    alarmManager.setInexactRepeating(
+        AlarmManager.RTC_WAKEUP,
+        nextAlarm.timeInMillis,
+        AlarmManager.INTERVAL_DAY,
+        alarmPendingIntent(context)
+    )
+    Toast.makeText(context, "هشدار روزانه تنظیم شد", Toast.LENGTH_SHORT).show()
+}
+
+private fun cancelDailyAlarm(context: Context) {
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    alarmManager.cancel(alarmPendingIntent(context))
+    Toast.makeText(context, "هشدار روزانه غیرفعال شد", Toast.LENGTH_SHORT).show()
+}
+
+private fun showAlarmNotification(context: Context, message: String) {
+    val channelId = "daily_alarm"
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        manager.createNotificationChannel(NotificationChannel(channelId, "هشدارهای روزانه", NotificationManager.IMPORTANCE_HIGH))
+    }
+    val notification = NotificationCompat.Builder(context, channelId)
+        .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+        .setContentTitle("یادآوری گاوداری")
+        .setContentText(message)
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setAutoCancel(true)
+        .build()
+    try {
+        NotificationManagerCompat.from(context).notify(2001, notification)
+    } catch (_: SecurityException) {
+        // Notification permission is requested by MainActivity on Android 13+.
     }
 }
 
