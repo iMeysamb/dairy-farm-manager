@@ -104,7 +104,15 @@ private data class FarmData(
     val animalList: List<AnimalRecord>,
     val invoiceList: List<InvoiceRecord>,
     val taskList: List<TaskRecord>,
-    val incomeList: List<IncomeRecord>
+    val incomeList: List<IncomeRecord>,
+    val milkList: List<MilkRecord>
+)
+
+private data class MilkRecord(
+    val id: Long,
+    val date: String,
+    val amount: Int,
+    val note: String
 )
 
 private data class EmployeeRecord(
@@ -170,7 +178,8 @@ private class FarmStore(context: Context) {
             decodeAnimals(preferences.getString("animal_list", "") ?: ""),
             decodeInvoices(preferences.getString("invoice_list", "") ?: ""),
             decodeTasks(preferences.getString("task_list", "") ?: ""),
-            decodeIncome(preferences.getString("income_list", "") ?: "")
+            decodeIncome(preferences.getString("income_list", "") ?: ""),
+            decodeMilk(preferences.getString("milk_list", "") ?: "")
         )
     }
 
@@ -191,6 +200,7 @@ private class FarmStore(context: Context) {
             .putString("invoice_list", encodeInvoices(data.invoiceList))
             .putString("task_list", encodeTasks(data.taskList))
             .putString("income_list", encodeIncome(data.incomeList))
+            .putString("milk_list", encodeMilk(data.milkList))
             .apply()
     }
 
@@ -245,6 +255,17 @@ private class FarmStore(context: Context) {
         if (parts.size == 7) IncomeRecord(
             parts[0].toLongOrNull() ?: 0L, parts[1], parts[2], parts[3],
             parts[4].toIntOrNull() ?: 0, parts[5], parts[6]
+        ) else null
+    }
+
+    private fun encodeMilk(items: List<MilkRecord>) = items.joinToString(";;") {
+        listOf(it.id, it.date, it.amount, it.note).joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+    }
+
+    private fun decodeMilk(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
+        val parts = row.split("|")
+        if (parts.size == 4) MilkRecord(
+            parts[0].toLongOrNull() ?: 0L, parts[1], parts[2].toIntOrNull() ?: 0, parts[3]
         ) else null
     }
 }
@@ -309,7 +330,7 @@ private fun DairyFarmApp() {
                 when (screen) {
                     Screen.Dashboard -> Dashboard(data, onOpen = { screen = it })
                     Screen.Animals -> Animals(data, onAdd = { animalEditor = null; showAnimalEditor = true }, onEdit = { animalEditor = it; showAnimalEditor = true }, onDelete = { id -> requestDelete("این دام") { update { value -> value.copy(animalList = value.animalList.filterNot { item -> item.id == id }, cows = (value.animalList.size - 1).coerceAtLeast(0)) } } })
-                    Screen.Milk -> Milk(data, onAdd = { editing = false; dialog = Screen.Milk }, onEdit = { editing = true; dialog = Screen.Milk }, onDelete = { requestDelete("اطلاعات تولید شیر") { update { it.copy(milk = 0) } } })
+                    Screen.Milk -> Milk(data, onAdd = { editing = false; dialog = Screen.Milk }, onEdit = { editing = true; dialog = Screen.Milk }, onDelete = { requestDelete("اطلاعات تولید شیر") { update { it.copy(milk = 0, milkList = emptyList()) } } })
                     Screen.Finance -> Finance(data, onAdd = { incomeEditor = null; showIncomeEditor = true }, onEdit = { incomeEditor = it; showIncomeEditor = true }, onDelete = { id -> requestDelete("این درآمد") { update { value -> val list = value.incomeList.filterNot { item -> item.id == id }; value.copy(incomeList = list, revenue = list.sumOf { item -> item.amount }) } } })
                     Screen.Employees -> Employees(data, onAdd = { employeeEditor = null; showEmployeeEditor = true }, onEdit = { employeeEditor = it; showEmployeeEditor = true }, onDelete = { id -> requestDelete("این کارمند") { update { value -> value.copy(employeeList = value.employeeList.filterNot { item -> item.id == id }, employees = (value.employeeList.size - 1).coerceAtLeast(0)) } } })
                     Screen.Reports -> Reports(data)
@@ -333,7 +354,11 @@ private fun DairyFarmApp() {
         EntryDialog(activeScreen, editing, onDismiss = { dialog = null; editing = false }) { amount, note ->
             when (activeScreen) {
             Screen.Animals -> update { it.copy(cows = if (editing) amount else it.cows + amount.coerceAtLeast(1)) }
-            Screen.Milk -> update { it.copy(milk = if (editing) amount else it.milk + amount.coerceAtLeast(1)) }
+            Screen.Milk -> update { value ->
+                val entry = MilkRecord(System.currentTimeMillis(), persianDate(), amount.coerceAtLeast(1), note)
+                val records = if (editing) value.milkList.dropLast(1) + entry else value.milkList + entry
+                value.copy(milk = if (records.isEmpty()) 0 else records.sumOf { item -> item.amount }, milkList = records)
+            }
             Screen.Finance -> update { it.copy(revenue = if (editing) amount else it.revenue + amount.coerceAtLeast(0)) }
             Screen.Employees -> update { it.copy(employees = if (editing) amount else it.employees + amount.coerceAtLeast(1)) }
             Screen.Health -> update { it.copy(healthChecks = if (editing) amount else it.healthChecks + 1) }
@@ -478,9 +503,20 @@ private fun Animals(data: FarmData, onAdd: () -> Unit, onEdit: (AnimalRecord) ->
 @Composable
 private fun Milk(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
     DetailHeader("تولید شیر", "ثبت شیر صبح و عصر و پیگیری تولید روزانه")
-    InfoCard("تولید امروز", "${data.milk} لیتر", "هدف روزانه: ۱٬۵۰۰ لیتر")
-    InfoCard("میانگین هر دام", "${(data.milk / data.cows.coerceAtLeast(1))} لیتر", "بر اساس دام‌های ثبت‌شده")
+    val today = persianDate()
+    val todayMilk = data.milkList.filter { it.date == today }.sumOf { it.amount }
+    InfoCard("تولید امروز", "$todayMilk لیتر", "هدف روزانه: ۱٬۵۰۰ لیتر")
+    InfoCard("میانگین هر دام", "${(todayMilk / data.cows.coerceAtLeast(1))} لیتر", "بر اساس دام‌های ثبت‌شده")
     Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت نوبت شیردوشی") }
+    if (data.milkList.isEmpty()) Text("هنوز رکورد شیری ثبت نشده است.", color = Color(0xFF64748B))
+    data.milkList.sortedByDescending { it.id }.take(8).forEach { record ->
+        RecordCard(
+            title = "${record.amount} لیتر | ${record.date}",
+            lines = listOf("توضیحات: ${record.note.ifBlank { "بدون توضیح" }}"),
+            onEdit = onEdit,
+            onDelete = onDelete
+        )
+    }
     EditDelete(onEdit, onDelete)
 }
 
@@ -522,6 +558,7 @@ private fun Reports(data: FarmData) {
     DetailHeader("گزارش‌های دقیق", "خلاصه واقعی دام، تولید، فروش و حسابداری")
     InfoCard("گزارش دام", "${data.animalList.size} رأس", "کارکنان: ${data.employeeList.size} نفر | موارد سلامت: ${data.healthChecks}")
     InfoCard("گزارش تولید", "${data.milk} لیتر", "تولید ثبت‌شده فعلی | موجودی خوراک: ${data.inventory} واحد")
+    MonthlyMilkReport(data)
     InfoCard("گزارش درآمد", "${incomeTotal} تومان", "${data.incomeList.size} رکورد درآمد")
     InfoCard("گزارش فروش", "${salesTotal} تومان", "${data.invoiceList.size} فاکتور | آخرین فاکتور: ${data.lastInvoiceCode.ifBlank { "ندارد" }}")
     InfoCard("سود و زیان", "${incomeTotal - estimatedExpenses} تومان", "درآمد: $incomeTotal | هزینه ثبت‌شده فعلی: $estimatedExpenses")
@@ -530,6 +567,40 @@ private fun Reports(data: FarmData) {
         Text("کارهای برنامه‌ریزی‌شده: ${data.taskList.size}")
         Text("دام‌های ثبت‌شده: ${data.animalList.size}")
         Text("کارکنان ثبت‌شده: ${data.employeeList.size}")
+    }
+}
+
+@Composable
+private fun MonthlyMilkReport(data: FarmData) {
+    val context = LocalContext.current
+    var month by remember { mutableStateOf(persianDate().substringBeforeLast("/")) }
+    val records = data.milkList.filter { it.date.startsWith("$month/") }
+    val dailyTotals = records.groupBy { it.date }.mapValues { (_, items) -> items.sumOf { it.amount } }
+    val weeklyTotals = records.groupBy { record ->
+        val day = record.date.substringAfterLast("/").toIntOrNull() ?: 1
+        "هفته ${((day - 1) / 7) + 1}"
+    }.mapValues { (_, items) -> items.sumOf { it.amount } }
+    val monthTotal = records.sumOf { it.amount }
+    val recordedDays = dailyTotals.size
+    SectionCard("گزارش ماهانه شیر", Icons.Default.BarChart) {
+        OutlinedTextField(
+            value = month,
+            onValueChange = { month = it.filter { character -> character.isDigit() || character == '/' } },
+            label = { Text("ماه شمسی (مثلاً ۱۴۰۵/۰۶)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        InfoCard("جمع نهایی ماه $month", "$monthTotal لیتر", "بر اساس $recordedDays روز ثبت‌شده")
+        Text("میانگین روزهای ثبت‌شده: ${if (recordedDays == 0) 0 else monthTotal / recordedDays} لیتر")
+        Text("گزارش هفتگی", fontWeight = FontWeight.Bold)
+        if (weeklyTotals.isEmpty()) Text("برای این ماه هنوز داده‌ای ثبت نشده است.", color = Color(0xFF64748B))
+        weeklyTotals.toSortedMap().forEach { (week, total) -> Text("$week: $total لیتر") }
+        Text("جزئیات روزانه", fontWeight = FontWeight.Bold)
+        dailyTotals.toSortedMap().forEach { (date, total) -> Text("$date: $total لیتر") }
+        Button(
+            onClick = { saveMonthlyMilkPdf(context, month, monthTotal, recordedDays, weeklyTotals, dailyTotals) },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("ذخیره گزارش ماهانه به‌صورت PDF") }
     }
 }
 
@@ -830,6 +901,49 @@ private fun notifyFarmAlerts(context: Context, data: FarmData) {
     } catch (_: SecurityException) {
         // Permission request is handled by MainActivity on Android 13+.
     }
+}
+
+private fun saveMonthlyMilkPdf(
+    context: Context,
+    month: String,
+    monthTotal: Int,
+    recordedDays: Int,
+    weeklyTotals: Map<String, Int>,
+    dailyTotals: Map<String, Int>
+) {
+    val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
+    directory.mkdirs()
+    val file = File(directory, "milk-report-$month.pdf")
+    val document = PdfDocument()
+    val page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
+    val paint = android.graphics.Paint().apply { textSize = 16f; color = android.graphics.Color.DKGRAY }
+    var y = 60f
+    page.canvas.drawText("Dairy Farm Manager - Monthly Milk Report", 48f, y, paint)
+    y += 36f
+    page.canvas.drawText("Month: $month", 48f, y, paint)
+    y += 28f
+    page.canvas.drawText("Total milk: $monthTotal liters", 48f, y, paint)
+    y += 28f
+    page.canvas.drawText("Recorded days: $recordedDays", 48f, y, paint)
+    y += 42f
+    page.canvas.drawText("Weekly summary", 48f, y, paint)
+    y += 28f
+    weeklyTotals.toSortedMap().forEach { (week, total) ->
+        page.canvas.drawText("$week: $total liters", 64f, y, paint)
+        y += 24f
+    }
+    y += 18f
+    page.canvas.drawText("Daily details", 48f, y, paint)
+    y += 28f
+    dailyTotals.toSortedMap().forEach { (date, total) ->
+        if (y > 800f) return@forEach
+        page.canvas.drawText("$date: $total liters", 64f, y, paint)
+        y += 22f
+    }
+    document.finishPage(page)
+    file.outputStream().use { document.writeTo(it) }
+    document.close()
+    Toast.makeText(context, "گزارش ماهانه در PDF ذخیره شد", Toast.LENGTH_LONG).show()
 }
 
 private fun saveInvoicePdf(context: Context, code: String, amount: Int) {
