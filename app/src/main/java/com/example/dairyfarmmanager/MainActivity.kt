@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -56,12 +57,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -112,6 +115,7 @@ private data class MilkRecord(
     val id: Long,
     val date: String,
     val amount: Int,
+    val unit: String,
     val note: String
 )
 
@@ -259,14 +263,16 @@ private class FarmStore(context: Context) {
     }
 
     private fun encodeMilk(items: List<MilkRecord>) = items.joinToString(";;") {
-        listOf(it.id, it.date, it.amount, it.note).joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+        listOf(it.id, it.date, it.amount, it.unit, it.note).joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
     }
 
     private fun decodeMilk(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
         val parts = row.split("|")
-        if (parts.size == 4) MilkRecord(
-            parts[0].toLongOrNull() ?: 0L, parts[1], parts[2].toIntOrNull() ?: 0, parts[3]
-        ) else null
+        when {
+            parts.size == 5 -> MilkRecord(parts[0].toLongOrNull() ?: 0L, parts[1], parts[2].toIntOrNull() ?: 0, parts[3], parts[4])
+            parts.size == 4 -> MilkRecord(parts[0].toLongOrNull() ?: 0L, parts[1], parts[2].toIntOrNull() ?: 0, "لیتر", parts[3])
+            else -> null
+        }
     }
 }
 
@@ -291,6 +297,19 @@ private fun DairyFarmApp() {
     var showIncomeEditor by remember { mutableStateOf(false) }
     var deleteRequest by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var darkMode by remember { mutableStateOf(context.getSharedPreferences("farm_data", Context.MODE_PRIVATE).getBoolean("dark", false)) }
+
+    BackHandler(enabled = dialog != null || showEmployeeEditor || showAnimalEditor || showInvoiceEditor || showTaskEditor || showIncomeEditor || screen != Screen.Dashboard) {
+        when {
+            deleteRequest != null -> deleteRequest = null
+            dialog != null -> { dialog = null; editing = false }
+            showEmployeeEditor -> { employeeEditor = null; showEmployeeEditor = false }
+            showAnimalEditor -> { animalEditor = null; showAnimalEditor = false }
+            showInvoiceEditor -> { invoiceEditor = null; showInvoiceEditor = false }
+            showTaskEditor -> { taskEditor = null; showTaskEditor = false }
+            showIncomeEditor -> { incomeEditor = null; showIncomeEditor = false }
+            screen != Screen.Dashboard -> screen = Screen.Dashboard
+        }
+    }
 
     fun update(transform: (FarmData) -> FarmData) {
         data = transform(data)
@@ -351,11 +370,11 @@ private fun DairyFarmApp() {
     }
 
     dialog?.let { activeScreen ->
-        EntryDialog(activeScreen, editing, onDismiss = { dialog = null; editing = false }) { amount, note ->
+        EntryDialog(activeScreen, editing, onDismiss = { dialog = null; editing = false }) { amount, note, unit ->
             when (activeScreen) {
             Screen.Animals -> update { it.copy(cows = if (editing) amount else it.cows + amount.coerceAtLeast(1)) }
             Screen.Milk -> update { value ->
-                val entry = MilkRecord(System.currentTimeMillis(), persianDate(), amount.coerceAtLeast(1), note)
+                val entry = MilkRecord(System.currentTimeMillis(), persianDate(), amount.coerceAtLeast(1), unit, note)
                 val records = if (editing) value.milkList.dropLast(1) + entry else value.milkList + entry
                 value.copy(milk = if (records.isEmpty()) 0 else records.sumOf { item -> item.amount }, milkList = records)
             }
@@ -505,13 +524,13 @@ private fun Milk(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDelete
     DetailHeader("تولید شیر", "ثبت شیر صبح و عصر و پیگیری تولید روزانه")
     val today = persianDate()
     val todayMilk = data.milkList.filter { it.date == today }.sumOf { it.amount }
-    InfoCard("تولید امروز", "$todayMilk لیتر", "هدف روزانه: ۱٬۵۰۰ لیتر")
-    InfoCard("میانگین هر دام", "${(todayMilk / data.cows.coerceAtLeast(1))} لیتر", "بر اساس دام‌های ثبت‌شده")
+    InfoCard("تولید امروز", "${data.milkList.filter { it.date == today }.sumOf { it.amount }} واحد", "ترکیبی از لیتر و کیلو")
+    InfoCard("میانگین هر دام", "${(todayMilk / data.cows.coerceAtLeast(1))} واحد", "بر اساس دام‌های ثبت‌شده")
     Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت نوبت شیردوشی") }
     if (data.milkList.isEmpty()) Text("هنوز رکورد شیری ثبت نشده است.", color = Color(0xFF64748B))
     data.milkList.sortedByDescending { it.id }.take(8).forEach { record ->
         RecordCard(
-            title = "${record.amount} لیتر | ${record.date}",
+            title = "${record.amount} ${record.unit} | ${record.date}",
             lines = listOf("توضیحات: ${record.note.ifBlank { "بدون توضیح" }}"),
             onEdit = onEdit,
             onDelete = onDelete
@@ -575,13 +594,18 @@ private fun MonthlyMilkReport(data: FarmData) {
     val context = LocalContext.current
     var month by remember { mutableStateOf(persianDate().substringBeforeLast("/")) }
     val records = data.milkList.filter { it.date.startsWith("$month/") }
-    val dailyTotals = records.groupBy { it.date }.mapValues { (_, items) -> items.sumOf { it.amount } }
-    val weeklyTotals = records.groupBy { record ->
-        val day = record.date.substringAfterLast("/").toIntOrNull() ?: 1
-        "هفته ${((day - 1) / 7) + 1}"
-    }.mapValues { (_, items) -> items.sumOf { it.amount } }
-    val monthTotal = records.sumOf { it.amount }
-    val recordedDays = dailyTotals.size
+    val units = records.map { it.unit }.distinct().sorted()
+    val dailyTotals = units.associateWith { unit ->
+        records.filter { it.unit == unit }.groupBy { it.date }.mapValues { (_, items) -> items.sumOf { it.amount } }
+    }
+    val weeklyTotals = units.associateWith { unit ->
+        records.filter { it.unit == unit }.groupBy { record ->
+            val day = record.date.substringAfterLast("/").toIntOrNull() ?: 1
+            "هفته ${((day - 1) / 7) + 1}"
+        }.mapValues { (_, items) -> items.sumOf { it.amount } }
+    }
+    val monthTotal = records.groupBy { it.unit }.mapValues { (_, items) -> items.sumOf { it.amount } }
+    val recordedDays = records.map { it.date }.distinct().size
     SectionCard("گزارش ماهانه شیر", Icons.Default.BarChart) {
         OutlinedTextField(
             value = month,
@@ -590,13 +614,19 @@ private fun MonthlyMilkReport(data: FarmData) {
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        InfoCard("جمع نهایی ماه $month", "$monthTotal لیتر", "بر اساس $recordedDays روز ثبت‌شده")
-        Text("میانگین روزهای ثبت‌شده: ${if (recordedDays == 0) 0 else monthTotal / recordedDays} لیتر")
+        InfoCard("جمع نهایی ماه $month", monthTotal.entries.joinToString(" | ") { "${it.value} ${it.key}" }.ifBlank { "بدون داده" }, "بر اساس $recordedDays روز ثبت‌شده")
+        Text("میانگین روزهای ثبت‌شده")
+        monthTotal.forEach { (unit, total) -> Text("${if (recordedDays == 0) 0 else total / recordedDays} $unit در روز") }
         Text("گزارش هفتگی", fontWeight = FontWeight.Bold)
-        if (weeklyTotals.isEmpty()) Text("برای این ماه هنوز داده‌ای ثبت نشده است.", color = Color(0xFF64748B))
-        weeklyTotals.toSortedMap().forEach { (week, total) -> Text("$week: $total لیتر") }
+        if (records.isEmpty()) Text("برای این ماه هنوز داده‌ای ثبت نشده است.", color = Color(0xFF64748B))
+        weeklyTotals.forEach { (unit, weeks) ->
+            Text(unit, fontWeight = FontWeight.Bold)
+            weeks.toSortedMap().forEach { (week, total) -> Text("$week: $total $unit") }
+        }
         Text("جزئیات روزانه", fontWeight = FontWeight.Bold)
-        dailyTotals.toSortedMap().forEach { (date, total) -> Text("$date: $total لیتر") }
+        dailyTotals.forEach { (unit, days) ->
+            days.toSortedMap().forEach { (date, total) -> Text("$date: $total $unit") }
+        }
         Button(
             onClick = { saveMonthlyMilkPdf(context, month, monthTotal, recordedDays, weeklyTotals, dailyTotals) },
             modifier = Modifier.fillMaxWidth()
@@ -906,10 +936,10 @@ private fun notifyFarmAlerts(context: Context, data: FarmData) {
 private fun saveMonthlyMilkPdf(
     context: Context,
     month: String,
-    monthTotal: Int,
+    monthTotal: Map<String, Int>,
     recordedDays: Int,
-    weeklyTotals: Map<String, Int>,
-    dailyTotals: Map<String, Int>
+    weeklyTotals: Map<String, Map<String, Int>>,
+    dailyTotals: Map<String, Map<String, Int>>
 ) {
     val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
     directory.mkdirs()
@@ -922,23 +952,27 @@ private fun saveMonthlyMilkPdf(
     y += 36f
     page.canvas.drawText("Month: $month", 48f, y, paint)
     y += 28f
-    page.canvas.drawText("Total milk: $monthTotal liters", 48f, y, paint)
+    page.canvas.drawText("Total milk: ${monthTotal.entries.joinToString(" | ") { "${it.value} ${it.key}" }}", 48f, y, paint)
     y += 28f
     page.canvas.drawText("Recorded days: $recordedDays", 48f, y, paint)
     y += 42f
     page.canvas.drawText("Weekly summary", 48f, y, paint)
     y += 28f
-    weeklyTotals.toSortedMap().forEach { (week, total) ->
-        page.canvas.drawText("$week: $total liters", 64f, y, paint)
-        y += 24f
+    weeklyTotals.forEach { (unit, weeks) ->
+        weeks.toSortedMap().forEach { (week, total) ->
+            page.canvas.drawText("$week: $total $unit", 64f, y, paint)
+            y += 24f
+        }
     }
     y += 18f
     page.canvas.drawText("Daily details", 48f, y, paint)
     y += 28f
-    dailyTotals.toSortedMap().forEach { (date, total) ->
-        if (y > 800f) return@forEach
-        page.canvas.drawText("$date: $total liters", 64f, y, paint)
-        y += 22f
+    dailyTotals.forEach { (unit, days) ->
+        days.toSortedMap().forEach { (date, total) ->
+            if (y > 800f) return@forEach
+            page.canvas.drawText("$date: $total $unit", 64f, y, paint)
+            y += 22f
+        }
     }
     document.finishPage(page)
     file.outputStream().use { document.writeTo(it) }
@@ -1004,10 +1038,13 @@ private fun SectionCard(title: String, icon: androidx.compose.ui.graphics.vector
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EntryDialog(screen: Screen, editing: Boolean, onDismiss: () -> Unit, onSave: (Int, String) -> Unit) {
+private fun EntryDialog(screen: Screen, editing: Boolean, onDismiss: () -> Unit, onSave: (Int, String, String) -> Unit) {
     var amount by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
+    var unit by remember { mutableStateOf("لیتر") }
+    var unitExpanded by remember { mutableStateOf(false) }
     val needsAmount = screen != Screen.Calendar && screen != Screen.Health
     val amountLabel = when (screen) {
         Screen.Milk -> "مقدار تولید شیر (لیتر)"
@@ -1035,10 +1072,33 @@ private fun EntryDialog(screen: Screen, editing: Boolean, onDismiss: () -> Unit,
                 if (needsAmount) {
                     OutlinedTextField(
                         value = amount,
-                        onValueChange = { amount = it.filter(Char::isDigit) },
+                        onValueChange = { value ->
+                            amount = if (screen == Screen.Milk) value.filter { character -> character in '0'..'9' } else value.filter(Char::isDigit)
+                        },
                         label = { Text(amountLabel) },
-                        singleLine = true
+                        singleLine = true,
+                        keyboardOptions = if (screen == Screen.Milk) KeyboardOptions(keyboardType = KeyboardType.Number) else KeyboardOptions.Default
                     )
+                }
+                if (screen == Screen.Milk) {
+                    ExposedDropdownMenuBox(expanded = unitExpanded, onExpandedChange = { unitExpanded = !unitExpanded }) {
+                        OutlinedTextField(
+                            value = unit,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("واحد") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = unitExpanded) },
+                            modifier = Modifier.menuAnchor().fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(expanded = unitExpanded, onDismissRequest = { unitExpanded = false }) {
+                            listOf("لیتر", "کیلو").forEach { option ->
+                                DropdownMenuItem(text = { Text(option) }, onClick = {
+                                    unit = option
+                                    unitExpanded = false
+                                })
+                            }
+                        }
+                    }
                 }
                 OutlinedTextField(
                     value = note,
@@ -1048,7 +1108,7 @@ private fun EntryDialog(screen: Screen, editing: Boolean, onDismiss: () -> Unit,
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(amount.toIntOrNull() ?: 0, note) }) { Text("ذخیره") } },
+        confirmButton = { TextButton(onClick = { onSave(amount.toIntOrNull() ?: 0, note, unit) }) { Text("ذخیره") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
     )
 }
