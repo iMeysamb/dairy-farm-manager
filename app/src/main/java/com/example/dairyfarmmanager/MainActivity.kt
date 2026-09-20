@@ -94,14 +94,10 @@ class MainActivity : ComponentActivity() {
 private const val ALARM_ACTION = "com.example.dairyfarmmanager.DAILY_ALARM"
 private const val ALARM_REQUEST_CODE = 2001
 
-private class DailyAlarmReceiver : BroadcastReceiver() {
+class DailyAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        val preferences = context.getSharedPreferences("farm_data", Context.MODE_PRIVATE)
-        if (!preferences.getBoolean("alarm_enabled", false)) return
-        showAlarmNotification(
-            context,
-            preferences.getString("alarm_message", "یادآوری مدیریت گاوداری") ?: "یادآوری مدیریت گاوداری"
-        )
+        val message = intent?.getStringExtra("message") ?: "یادآوری مدیریت گاوداری"
+        showAlarmNotification(context, message)
     }
 }
 
@@ -128,7 +124,8 @@ private data class FarmData(
     val taskList: List<TaskRecord>,
     val incomeList: List<IncomeRecord>,
     val milkList: List<MilkRecord>,
-    val inventoryList: List<InventoryRecord>
+    val inventoryList: List<InventoryRecord>,
+    val alarmList: List<AlarmRecord>
 )
 
 private data class MilkRecord(
@@ -147,6 +144,14 @@ private data class InventoryRecord(
     val bags: Int,
     val totalWeight: Int,
     val note: String
+)
+
+private data class AlarmRecord(
+    val id: Long,
+    val hour: Int,
+    val minute: Int,
+    val message: String,
+    val enabled: Boolean
 )
 
 private data class EmployeeRecord(
@@ -214,7 +219,8 @@ private class FarmStore(context: Context) {
             decodeTasks(preferences.getString("task_list", "") ?: ""),
             decodeIncome(preferences.getString("income_list", "") ?: ""),
             decodeMilk(preferences.getString("milk_list", "") ?: ""),
-            decodeInventory(preferences.getString("inventory_list", "") ?: "")
+            decodeInventory(preferences.getString("inventory_list", "") ?: ""),
+            decodeAlarms(preferences.getString("alarm_list", "") ?: "")
         )
     }
 
@@ -237,6 +243,7 @@ private class FarmStore(context: Context) {
             .putString("income_list", encodeIncome(data.incomeList))
             .putString("milk_list", encodeMilk(data.milkList))
             .putString("inventory_list", encodeInventory(data.inventoryList))
+            .putString("alarm_list", encodeAlarms(data.alarmList))
             .apply()
     }
 
@@ -319,6 +326,21 @@ private class FarmStore(context: Context) {
             parts[4].toIntOrNull() ?: 0, parts[5].toIntOrNull() ?: 0, parts[6]
         ) else null
     }
+
+    private fun encodeAlarms(items: List<AlarmRecord>) = items.joinToString(";;") {
+        listOf(it.id, it.hour, it.minute, it.message, it.enabled).joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+    }
+
+    private fun decodeAlarms(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
+        val parts = row.split("|")
+        if (parts.size == 5) AlarmRecord(
+            parts[0].toLongOrNull() ?: 0L,
+            parts[1].toIntOrNull()?.coerceIn(0, 23) ?: 8,
+            parts[2].toIntOrNull()?.coerceIn(0, 59) ?: 0,
+            parts[3],
+            parts[4].toBooleanStrictOrNull() ?: false
+        ) else null
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -342,13 +364,14 @@ private fun DairyFarmApp() {
     var showIncomeEditor by remember { mutableStateOf(false) }
     var inventoryEditor by remember { mutableStateOf<InventoryRecord?>(null) }
     var showInventoryEditor by remember { mutableStateOf(false) }
+    var milkEditor by remember { mutableStateOf<MilkRecord?>(null) }
     var deleteRequest by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var darkMode by remember { mutableStateOf(context.getSharedPreferences("farm_data", Context.MODE_PRIVATE).getBoolean("dark", false)) }
 
     BackHandler(enabled = dialog != null || showEmployeeEditor || showAnimalEditor || showInvoiceEditor || showTaskEditor || showIncomeEditor || showInventoryEditor || screen != Screen.Dashboard) {
         when {
             deleteRequest != null -> deleteRequest = null
-            dialog != null -> { dialog = null; editing = false }
+            dialog != null -> { dialog = null; editing = false; milkEditor = null }
             showEmployeeEditor -> { employeeEditor = null; showEmployeeEditor = false }
             showAnimalEditor -> { animalEditor = null; showAnimalEditor = false }
             showInvoiceEditor -> { invoiceEditor = null; showInvoiceEditor = false }
@@ -397,7 +420,7 @@ private fun DairyFarmApp() {
                 when (screen) {
                     Screen.Dashboard -> Dashboard(data, onOpen = { screen = it })
                     Screen.Animals -> Animals(data, onAdd = { animalEditor = null; showAnimalEditor = true }, onEdit = { animalEditor = it; showAnimalEditor = true }, onDelete = { id -> requestDelete("این دام") { update { value -> value.copy(animalList = value.animalList.filterNot { item -> item.id == id }, cows = (value.animalList.size - 1).coerceAtLeast(0)) } } })
-                    Screen.Milk -> Milk(data, onAdd = { editing = false; dialog = Screen.Milk }, onEdit = { editing = true; dialog = Screen.Milk }, onDelete = { requestDelete("اطلاعات تولید شیر") { update { it.copy(milk = 0, milkList = emptyList()) } } })
+                    Screen.Milk -> Milk(data, onAdd = { editing = false; milkEditor = null; dialog = Screen.Milk }, onEdit = { record -> editing = true; milkEditor = record; dialog = Screen.Milk }, onDelete = { requestDelete("اطلاعات تولید شیر") { update { it.copy(milk = 0, milkList = emptyList()) } } })
                     Screen.Finance -> Finance(data, onAdd = { incomeEditor = null; showIncomeEditor = true }, onEdit = { incomeEditor = it; showIncomeEditor = true }, onDelete = { id -> requestDelete("این درآمد") { update { value -> val list = value.incomeList.filterNot { item -> item.id == id }; value.copy(incomeList = list, revenue = list.sumOf { item -> item.amount }) } } })
                     Screen.Employees -> Employees(data, onAdd = { employeeEditor = null; showEmployeeEditor = true }, onEdit = { employeeEditor = it; showEmployeeEditor = true }, onDelete = { id -> requestDelete("این کارمند") { update { value -> value.copy(employeeList = value.employeeList.filterNot { item -> item.id == id }, employees = (value.employeeList.size - 1).coerceAtLeast(0)) } } })
                     Screen.Reports -> Reports(data)
@@ -410,7 +433,7 @@ private fun DairyFarmApp() {
                         onDelete = { id -> requestDelete("این تراکنش انبار") { update { value -> value.copy(inventoryList = value.inventoryList.filterNot { item -> item.id == id }) } } }
                     )
                     Screen.Sales -> Sales(data, onAdd = { invoiceEditor = null; showInvoiceEditor = true }, onEdit = { invoiceEditor = it; showInvoiceEditor = true }, onDelete = { id -> requestDelete("این فاکتور") { update { value -> val list = value.invoiceList.filterNot { item -> item.id == id }; value.copy(invoiceList = list, invoices = list.size, lastInvoiceCode = list.lastOrNull()?.code ?: "") } } })
-                    Screen.Alerts -> AlertSettings(context)
+                    Screen.Alerts -> AlertSettings(data, onUpdate = ::update)
                 }
                 if (screen != Screen.Dashboard) {
                     OutlinedButton(onClick = { screen = Screen.Dashboard }, modifier = Modifier.fillMaxWidth()) {
@@ -424,12 +447,12 @@ private fun DairyFarmApp() {
     }
 
     dialog?.let { activeScreen ->
-        EntryDialog(activeScreen, editing, onDismiss = { dialog = null; editing = false }) { amount, note, unit ->
+        EntryDialog(activeScreen, editing, milkEditor, onDismiss = { dialog = null; editing = false; milkEditor = null }) { amount, note, unit ->
             when (activeScreen) {
             Screen.Animals -> update { it.copy(cows = if (editing) amount else it.cows + amount.coerceAtLeast(1)) }
             Screen.Milk -> update { value ->
-                val entry = MilkRecord(System.currentTimeMillis(), persianDate(), amount.coerceAtLeast(1), unit, note)
-                val records = if (editing) value.milkList.dropLast(1) + entry else value.milkList + entry
+                val entry = MilkRecord(milkEditor?.id ?: System.currentTimeMillis(), milkEditor?.date ?: persianDate(), amount.coerceAtLeast(1), unit, note)
+                val records = if (editing) value.milkList.map { if (it.id == entry.id) entry else it } else value.milkList + entry
                 value.copy(milk = if (records.isEmpty()) 0 else records.sumOf { item -> item.amount }, milkList = records)
             }
             Screen.Finance -> update { it.copy(revenue = if (editing) amount else it.revenue + amount.coerceAtLeast(0)) }
@@ -446,6 +469,7 @@ private fun DairyFarmApp() {
             }
             editing = false
             dialog = null
+            milkEditor = null
         }
     }
 
@@ -557,6 +581,10 @@ private fun Dashboard(data: FarmData, onOpen: (Screen) -> Unit) {
         Icon(Icons.Default.Alarm, contentDescription = null)
         Text("  تنظیم هشدار")
     }
+    Button(onClick = { onOpen(Screen.Sales) }, modifier = Modifier.fillMaxWidth()) {
+        Icon(Icons.Default.LocalDrink, contentDescription = null)
+        Text("  فروش محصولات")
+    }
     val screens = listOf(
         Screen.Animals to ("دام‌ها و گوساله‌ها" to Icons.Default.Pets),
         Screen.Milk to ("ثبت تولید شیر" to Icons.Default.LocalDrink),
@@ -565,8 +593,7 @@ private fun Dashboard(data: FarmData, onOpen: (Screen) -> Unit) {
         Screen.Reports to ("گزارش‌ها" to Icons.Default.BarChart),
         Screen.Calendar to ("تقویم کارها" to Icons.Default.CalendarToday),
         Screen.Health to ("سلامت و واکسن" to Icons.Default.CheckCircle),
-        Screen.Inventory to ("انبارداری" to Icons.Default.Money),
-        Screen.Sales to ("فروش محصولات" to Icons.Default.LocalDrink)
+        Screen.Inventory to ("انبارداری" to Icons.Default.Money)
     )
     screens.chunked(2).forEach { row ->
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -597,7 +624,7 @@ private fun Animals(data: FarmData, onAdd: () -> Unit, onEdit: (AnimalRecord) ->
 }
 
 @Composable
-private fun Milk(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun Milk(data: FarmData, onAdd: () -> Unit, onEdit: (MilkRecord) -> Unit, onDelete: () -> Unit) {
     DetailHeader("تولید شیر", "ثبت شیر صبح و عصر و پیگیری تولید روزانه")
     val today = persianDate()
     val todayMilk = data.milkList.filter { it.date == today }.sumOf { it.amount }
@@ -609,11 +636,14 @@ private fun Milk(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDelete
         RecordCard(
             title = "${record.amount} ${record.unit} | ${record.date}",
             lines = listOf("توضیحات: ${record.note.ifBlank { "بدون توضیح" }}"),
-            onEdit = onEdit,
+            onEdit = { onEdit(record) },
             onDelete = onDelete
         )
     }
-    EditDelete(onEdit, onDelete)
+    if (data.milkList.isNotEmpty()) {
+        OutlinedButton(onClick = { onEdit(data.milkList.maxByOrNull { it.id }!!) }, modifier = Modifier.fillMaxWidth()) { Text("ویرایش آخرین ثبت") }
+        TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) { Text("حذف همه ثبت‌های شیر") }
+    }
 }
 
 @Composable
@@ -668,60 +698,61 @@ private fun Reports(data: FarmData) {
 
 
 @Composable
-private fun AlertSettings(context: Context) {
-    val preferences = context.getSharedPreferences("farm_data", Context.MODE_PRIVATE)
-    var enabled by remember { mutableStateOf(preferences.getBoolean("alarm_enabled", false)) }
-    var hour by remember { mutableStateOf(preferences.getInt("alarm_hour", 8).toString()) }
-    var minute by remember { mutableStateOf(preferences.getInt("alarm_minute", 0).toString().padStart(2, '0')) }
-    var message by remember { mutableStateOf(preferences.getString("alarm_message", "یادآوری مدیریت گاوداری") ?: "یادآوری مدیریت گاوداری") }
-    var saved by remember { mutableStateOf(false) }
-    DetailHeader("تنظیم هشدار", "برای دریافت یادآوری روزانه زمان و متن هشدار را تنظیم کنید")
-    SectionCard("هشدار روزانه", Icons.Default.Alarm) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-            Column { Text("فعال‌سازی آلارم", fontWeight = FontWeight.Bold); Text("هر روز در زمان تعیین‌شده اعلان نمایش داده می‌شود", fontSize = 12.sp, color = Color(0xFF64748B)) }
-            Switch(checked = enabled, onCheckedChange = { enabled = it; saved = false })
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedTextField(
-                value = hour,
-                onValueChange = { hour = it.filter(Char::isDigit).take(2); saved = false },
-                label = { Text("ساعت") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            OutlinedTextField(
-                value = minute,
-                onValueChange = { minute = it.filter(Char::isDigit).take(2); saved = false },
-                label = { Text("دقیقه") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        OutlinedTextField(
-            value = message,
-            onValueChange = { message = it; saved = false },
-            label = { Text("متن هشدار") },
-            singleLine = false,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Button(onClick = {
-            val validHour = hour.toIntOrNull()?.coerceIn(0, 23) ?: 8
-            val validMinute = minute.toIntOrNull()?.coerceIn(0, 59) ?: 0
-            preferences.edit()
-                .putBoolean("alarm_enabled", enabled)
-                .putInt("alarm_hour", validHour)
-                .putInt("alarm_minute", validMinute)
-                .putString("alarm_message", message.ifBlank { "یادآوری مدیریت گاوداری" })
-                .apply()
-            if (enabled) scheduleDailyAlarm(context, validHour, validMinute) else cancelDailyAlarm(context)
-            hour = validHour.toString()
-            minute = validMinute.toString().padStart(2, '0')
-            saved = true
-        }, modifier = Modifier.fillMaxWidth()) { Text("ذخیره تنظیمات هشدار") }
-        if (saved) Text("تنظیمات هشدار ذخیره شد", color = Color(0xFF15803D))
+private fun AlertSettings(data: FarmData, onUpdate: ((FarmData) -> FarmData) -> Unit) {
+    val context = LocalContext.current
+    var editor by remember { mutableStateOf<AlarmRecord?>(null) }
+    DetailHeader("تنظیم هشدار", "هشدارهای روزانه را اضافه، ویرایش یا حذف کنید")
+    Button(onClick = { editor = AlarmRecord(System.currentTimeMillis(), 8, 0, "یادآوری مدیریت گاوداری", true) }, modifier = Modifier.fillMaxWidth()) {
+        Icon(Icons.Default.Alarm, contentDescription = null)
+        Text("  افزودن هشدار جدید")
     }
+    if (data.alarmList.isEmpty()) Text("هنوز هشداری تنظیم نشده است.", color = Color(0xFF64748B))
+    data.alarmList.sortedBy { it.id }.forEach { alarm ->
+        RecordCard(
+            title = "${alarm.hour.toString().padStart(2, '0')}:${alarm.minute.toString().padStart(2, '0')} | ${if (alarm.enabled) "فعال" else "غیرفعال"}",
+            lines = listOf(alarm.message),
+            onEdit = { editor = alarm },
+            onDelete = { onUpdate { value -> value.copy(alarmList = value.alarmList.filterNot { it.id == alarm.id }) }; cancelDailyAlarm(context, alarm.id) }
+        )
+    }
+    editor?.let { alarm ->
+        AlarmEditor(alarm, onDismiss = { editor = null }) { updated ->
+            onUpdate { value -> value.copy(alarmList = value.alarmList.filterNot { it.id == updated.id } + updated) }
+            if (updated.enabled) scheduleDailyAlarm(context, updated) else cancelDailyAlarm(context, updated.id)
+            editor = null
+        }
+    }
+}
+
+@Composable
+private fun AlarmEditor(existing: AlarmRecord, onDismiss: () -> Unit, onSave: (AlarmRecord) -> Unit) {
+    var hour by remember(existing.id) { mutableStateOf(existing.hour.toString()) }
+    var minute by remember(existing.id) { mutableStateOf(existing.minute.toString().padStart(2, '0')) }
+    var message by remember(existing.id) { mutableStateOf(existing.message) }
+    var enabled by remember(existing.id) { mutableStateOf(existing.enabled) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${if (existing.id == 0L) "افزودن" else "ویرایش"} هشدار") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(hour, { hour = it.filter(Char::isDigit).take(2) }, label = { Text("ساعت") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(minute, { minute = it.filter(Char::isDigit).take(2) }, label = { Text("دقیقه") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.weight(1f))
+                }
+                OutlinedTextField(message, { message = it }, label = { Text("توضیحات هشدار") }, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    Text("فعال باشد")
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(AlarmRecord(existing.id, hour.toIntOrNull()?.coerceIn(0, 23) ?: 8, minute.toIntOrNull()?.coerceIn(0, 59) ?: 0, message.ifBlank { "یادآوری مدیریت گاوداری" }, enabled))
+            }) { Text("ذخیره") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1194,38 +1225,41 @@ private fun notifyFarmAlerts(context: Context, data: FarmData) {
     }
 }
 
-private fun alarmPendingIntent(context: Context): PendingIntent {
-    val intent = Intent(context, DailyAlarmReceiver::class.java).setAction(ALARM_ACTION)
+private fun alarmPendingIntent(context: Context, alarmId: Long, message: String = "یادآوری مدیریت گاوداری"): PendingIntent {
+    val intent = Intent(context, DailyAlarmReceiver::class.java)
+        .setAction(ALARM_ACTION)
+        .putExtra("alarm_id", alarmId)
+        .putExtra("message", message)
     return PendingIntent.getBroadcast(
         context,
-        ALARM_REQUEST_CODE,
+        alarmId.toInt(),
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 }
 
-private fun scheduleDailyAlarm(context: Context, hour: Int, minute: Int) {
+private fun scheduleDailyAlarm(context: Context, alarm: AlarmRecord) {
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     val nextAlarm = Calendar.getInstance().apply {
-        set(Calendar.HOUR_OF_DAY, hour)
-        set(Calendar.MINUTE, minute)
+        set(Calendar.HOUR_OF_DAY, alarm.hour)
+        set(Calendar.MINUTE, alarm.minute)
         set(Calendar.SECOND, 0)
         set(Calendar.MILLISECOND, 0)
         if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
     }
+    cancelDailyAlarm(context, alarm.id)
     alarmManager.setInexactRepeating(
         AlarmManager.RTC_WAKEUP,
         nextAlarm.timeInMillis,
         AlarmManager.INTERVAL_DAY,
-        alarmPendingIntent(context)
+        alarmPendingIntent(context, alarm.id, alarm.message)
     )
     Toast.makeText(context, "هشدار روزانه تنظیم شد", Toast.LENGTH_SHORT).show()
 }
 
-private fun cancelDailyAlarm(context: Context) {
+private fun cancelDailyAlarm(context: Context, alarmId: Long) {
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-    alarmManager.cancel(alarmPendingIntent(context))
-    Toast.makeText(context, "هشدار روزانه غیرفعال شد", Toast.LENGTH_SHORT).show()
+    alarmManager.cancel(alarmPendingIntent(context, alarmId))
 }
 
 private fun showAlarmNotification(context: Context, message: String) {
@@ -1386,10 +1420,10 @@ private fun SectionCard(title: String, icon: androidx.compose.ui.graphics.vector
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EntryDialog(screen: Screen, editing: Boolean, onDismiss: () -> Unit, onSave: (Int, String, String) -> Unit) {
-    var amount by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var unit by remember { mutableStateOf("لیتر") }
+private fun EntryDialog(screen: Screen, editing: Boolean, existingMilk: MilkRecord?, onDismiss: () -> Unit, onSave: (Int, String, String) -> Unit) {
+    var amount by remember(existingMilk?.id, screen) { mutableStateOf(existingMilk?.amount?.toString() ?: "") }
+    var note by remember(existingMilk?.id, screen) { mutableStateOf(existingMilk?.note ?: "") }
+    var unit by remember(existingMilk?.id, screen) { mutableStateOf(existingMilk?.unit ?: "لیتر") }
     var unitExpanded by remember { mutableStateOf(false) }
     val needsAmount = screen != Screen.Calendar && screen != Screen.Health
     val amountLabel = when (screen) {
