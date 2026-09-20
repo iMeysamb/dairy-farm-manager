@@ -593,6 +593,8 @@ private fun Reports(data: FarmData) {
 private fun MonthlyMilkReport(data: FarmData) {
     val context = LocalContext.current
     var month by remember { mutableStateOf(persianDate().substringBeforeLast("/")) }
+    var monthExpanded by remember { mutableStateOf(false) }
+    val availableMonths = (data.milkList.map { it.date.substringBeforeLast("/") } + persianDate().substringBeforeLast("/")).distinct().sortedDescending()
     val records = data.milkList.filter { it.date.startsWith("$month/") }
     val units = records.map { it.unit }.distinct().sorted()
     val dailyTotals = units.associateWith { unit ->
@@ -607,13 +609,24 @@ private fun MonthlyMilkReport(data: FarmData) {
     val monthTotal = records.groupBy { it.unit }.mapValues { (_, items) -> items.sumOf { it.amount } }
     val recordedDays = records.map { it.date }.distinct().size
     SectionCard("گزارش ماهانه شیر", Icons.Default.BarChart) {
-        OutlinedTextField(
-            value = month,
-            onValueChange = { month = it.filter { character -> character.isDigit() || character == '/' } },
-            label = { Text("ماه شمسی (مثلاً ۱۴۰۵/۰۶)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
+        ExposedDropdownMenuBox(expanded = monthExpanded, onExpandedChange = { monthExpanded = !monthExpanded }) {
+            OutlinedTextField(
+                value = month,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("انتخاب ماه گزارش") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = monthExpanded) },
+                modifier = Modifier.menuAnchor().fillMaxWidth()
+            )
+            ExposedDropdownMenu(expanded = monthExpanded, onDismissRequest = { monthExpanded = false }) {
+                availableMonths.forEach { option ->
+                    DropdownMenuItem(text = { Text(option) }, onClick = {
+                        month = option
+                        monthExpanded = false
+                    })
+                }
+            }
+        }
         InfoCard("جمع نهایی ماه $month", monthTotal.entries.joinToString(" | ") { "${it.value} ${it.key}" }.ifBlank { "بدون داده" }, "بر اساس $recordedDays روز ثبت‌شده")
         Text("میانگین روزهای ثبت‌شده")
         monthTotal.forEach { (unit, total) -> Text("${if (recordedDays == 0) 0 else total / recordedDays} $unit در روز") }
