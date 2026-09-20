@@ -480,6 +480,10 @@ private fun Dashboard(data: FarmData, onOpen: (Screen) -> Unit) {
         Text("• کار بعدی: ${data.nextTask}", color = Color(0xFF334155))
     }
     Text("بخش‌های برنامه", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+    Button(onClick = { onOpen(Screen.Reports) }, modifier = Modifier.fillMaxWidth()) {
+        Icon(Icons.Default.BarChart, contentDescription = null)
+        Text("  مشاهده گزارش ماهانه شیر")
+    }
     val screens = listOf(
         Screen.Animals to ("دام‌ها و گوساله‌ها" to Icons.Default.Pets),
         Screen.Milk to ("ثبت تولید شیر" to Icons.Default.LocalDrink),
