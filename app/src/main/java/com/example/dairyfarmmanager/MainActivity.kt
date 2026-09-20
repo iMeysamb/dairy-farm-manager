@@ -642,6 +642,7 @@ private fun Reports(data: FarmData) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MonthlyMilkReport(data: FarmData) {
     val context = LocalContext.current
