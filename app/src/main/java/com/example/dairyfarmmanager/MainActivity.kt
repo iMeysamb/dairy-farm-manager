@@ -1,9 +1,18 @@
 package com.example.dairyfarmmanager
 
+import android.content.Context
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.graphics.pdf.PdfDocument
 import android.os.Bundle
+import android.os.Build
+import android.os.Environment
+import android.widget.Toast
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,235 +21,921 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.LocalDrink
 import androidx.compose.material.icons.filled.Money
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.io.File
+import java.util.Calendar
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            DairyFarmManagerTheme {
-                DairyFarmApp()
-            }
+            DairyFarmApp()
         }
+        val currentData = FarmStore(this).read()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+        }
+        notifyFarmAlerts(this, currentData)
+    }
+}
+
+private enum class Screen(val title: String) {
+    Dashboard("داشبورد"), Animals("دام‌ها"), Milk("تولید شیر"), Finance("مالی"),
+    Employees("کارکنان"), Reports("گزارش‌ها"), Calendar("برنامه‌ریزی"), Health("سلامت"),
+    Inventory("انبارداری"), Sales("فروش محصولات")
+}
+
+private data class FarmData(
+    val cows: Int,
+    val milk: Int,
+    val revenue: Int,
+    val orders: Int,
+    val employees: Int,
+    val healthChecks: Int,
+    val nextTask: String,
+    val inventory: Int,
+    val invoices: Int,
+    val lastInvoiceCode: String,
+    val employeeList: List<EmployeeRecord>,
+    val animalList: List<AnimalRecord>,
+    val invoiceList: List<InvoiceRecord>,
+    val taskList: List<TaskRecord>,
+    val incomeList: List<IncomeRecord>
+)
+
+private data class EmployeeRecord(
+    val id: Long,
+    val name: String,
+    val role: String,
+    val phone: String,
+    val hireDate: String
+)
+
+private data class AnimalRecord(
+    val id: Long,
+    val tag: String,
+    val breed: String,
+    val gender: String,
+    val birthDate: String,
+    val health: String
+)
+
+private data class InvoiceRecord(
+    val id: Long,
+    val code: String,
+    val customer: String,
+    val product: String,
+    val quantity: Int,
+    val unitPrice: Int,
+    val total: Int,
+    val date: String,
+    val note: String
+)
+
+private data class TaskRecord(
+    val id: Long,
+    val title: String,
+    val dueDate: String,
+    val note: String
+)
+
+private data class IncomeRecord(
+    val id: Long,
+    val date: String,
+    val category: String,
+    val source: String,
+    val amount: Int,
+    val method: String,
+    val note: String
+)
+
+private class FarmStore(context: Context) {
+    private val preferences = context.getSharedPreferences("farm_data", Context.MODE_PRIVATE)
+
+    fun read(): FarmData {
+        if (!preferences.getBoolean("zero_data_v2", false)) {
+            preferences.edit().clear().putBoolean("zero_data_v2", true).apply()
+        }
+        return FarmData(
+            preferences.getInt("cows", 0), preferences.getInt("milk", 0),
+            preferences.getInt("revenue", 0), preferences.getInt("orders", 0),
+            preferences.getInt("employees", 0), preferences.getInt("health", 0),
+            preferences.getString("task", "") ?: "", preferences.getInt("inventory", 0),
+            preferences.getInt("invoices", 0), preferences.getString("invoice", "") ?: "",
+            decodeEmployees(preferences.getString("employee_list", "") ?: ""),
+            decodeAnimals(preferences.getString("animal_list", "") ?: ""),
+            decodeInvoices(preferences.getString("invoice_list", "") ?: ""),
+            decodeTasks(preferences.getString("task_list", "") ?: ""),
+            decodeIncome(preferences.getString("income_list", "") ?: "")
+        )
+    }
+
+    fun save(data: FarmData) {
+        preferences.edit()
+            .putInt("cows", data.cows)
+            .putInt("milk", data.milk)
+            .putInt("revenue", data.revenue)
+            .putInt("orders", data.orders)
+            .putInt("employees", data.employees)
+            .putInt("health", data.healthChecks)
+            .putString("task", data.nextTask)
+            .putInt("inventory", data.inventory)
+            .putInt("invoices", data.invoices)
+            .putString("invoice", data.lastInvoiceCode)
+            .putString("employee_list", encodeEmployees(data.employeeList))
+            .putString("animal_list", encodeAnimals(data.animalList))
+            .putString("invoice_list", encodeInvoices(data.invoiceList))
+            .putString("task_list", encodeTasks(data.taskList))
+            .putString("income_list", encodeIncome(data.incomeList))
+            .apply()
+    }
+
+    private fun encodeEmployees(items: List<EmployeeRecord>) = items.joinToString(";;") {
+        listOf(it.id, it.name, it.role, it.phone, it.hireDate).joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+    }
+
+    private fun decodeEmployees(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
+        val parts = row.split("|")
+        if (parts.size == 5) EmployeeRecord(parts[0].toLongOrNull() ?: 0L, parts[1], parts[2], parts[3], parts[4]) else null
+    }
+
+    private fun encodeAnimals(items: List<AnimalRecord>) = items.joinToString(";;") {
+        listOf(it.id, it.tag, it.breed, it.gender, it.birthDate, it.health).joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+    }
+
+    private fun decodeAnimals(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
+        val parts = row.split("|")
+        if (parts.size == 6) AnimalRecord(parts[0].toLongOrNull() ?: 0L, parts[1], parts[2], parts[3], parts[4], parts[5]) else null
+    }
+
+    private fun encodeInvoices(items: List<InvoiceRecord>) = items.joinToString(";;") {
+        listOf(it.id, it.code, it.customer, it.product, it.quantity, it.unitPrice, it.total, it.date, it.note)
+            .joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+    }
+
+    private fun decodeInvoices(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
+        val parts = row.split("|")
+        if (parts.size == 9) InvoiceRecord(
+            parts[0].toLongOrNull() ?: 0L, parts[1], parts[2], parts[3],
+            parts[4].toIntOrNull() ?: 0, parts[5].toIntOrNull() ?: 0,
+            parts[6].toIntOrNull() ?: 0, parts[7], parts[8]
+        ) else null
+    }
+
+    private fun encodeTasks(items: List<TaskRecord>) = items.joinToString(";;") {
+        listOf(it.id, it.title, it.dueDate, it.note).joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+    }
+
+    private fun decodeTasks(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
+        val parts = row.split("|")
+        if (parts.size == 4) TaskRecord(parts[0].toLongOrNull() ?: 0L, parts[1], parts[2], parts[3]) else null
+    }
+
+    private fun encodeIncome(items: List<IncomeRecord>) = items.joinToString(";;") {
+        listOf(it.id, it.date, it.category, it.source, it.amount, it.method, it.note)
+            .joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+    }
+
+    private fun decodeIncome(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
+        val parts = row.split("|")
+        if (parts.size == 7) IncomeRecord(
+            parts[0].toLongOrNull() ?: 0L, parts[1], parts[2], parts[3],
+            parts[4].toIntOrNull() ?: 0, parts[5], parts[6]
+        ) else null
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DairyFarmApp() {
-    val summaryCards = listOf(
-        StatCard("Milk Today", "1,240 L", "+8.2%", Color(0xFF4CAF50)),
-        StatCard("Cows", "186", "12 active", Color(0xFF2196F3)),
-        StatCard("Orders", "42", "18 ready", Color(0xFF9C27B0)),
-        StatCard("Revenue", "₺92,500", "+₺7,200", Color(0xFFFB8C00))
-    )
+private fun DairyFarmApp() {
+    val context = LocalContext.current
+    val store = remember { FarmStore(context) }
+    var data by remember { mutableStateOf(store.read()) }
+    var screen by remember { mutableStateOf(Screen.Dashboard) }
+    var dialog by remember { mutableStateOf<Screen?>(null) }
+    var editing by remember { mutableStateOf(false) }
+    var employeeEditor by remember { mutableStateOf<EmployeeRecord?>(null) }
+    var animalEditor by remember { mutableStateOf<AnimalRecord?>(null) }
+    var showEmployeeEditor by remember { mutableStateOf(false) }
+    var showAnimalEditor by remember { mutableStateOf(false) }
+    var invoiceEditor by remember { mutableStateOf<InvoiceRecord?>(null) }
+    var showInvoiceEditor by remember { mutableStateOf(false) }
+    var taskEditor by remember { mutableStateOf<TaskRecord?>(null) }
+    var showTaskEditor by remember { mutableStateOf(false) }
+    var incomeEditor by remember { mutableStateOf<IncomeRecord?>(null) }
+    var showIncomeEditor by remember { mutableStateOf(false) }
+    var deleteRequest by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    var darkMode by remember { mutableStateOf(context.getSharedPreferences("farm_data", Context.MODE_PRIVATE).getBoolean("dark", false)) }
 
-    val featureCards = listOf(
-        FeatureCard("Dashboard", Icons.Default.Dashboard, "Overview"),
-        FeatureCard("Animals", Icons.Default.Pets, "Cows & Calves"),
-        FeatureCard("Milk", Icons.Default.LocalDrink, "Production"),
-        FeatureCard("Finance", Icons.Default.Money, "Income"),
-        FeatureCard("Employees", Icons.Default.AccountCircle, "Staff"),
-        FeatureCard("Reports", Icons.Default.BarChart, "Analytics"),
-        FeatureCard("Calendar", Icons.Default.CalendarToday, "Schedule"),
-        FeatureCard("Health", Icons.Default.CheckCircle, "Vaccination")
-    )
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Dairy Farm Manager") },
-            )
-        },
-        containerColor = Color(0xFFF5F7F8)
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text(
-                text = "Farm overview",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF1E293B)
-            )
-
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                items(summaryCards) { card ->
-                    StatCardView(card)
-                }
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Alerts",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                            color = Color(0xFF1E293B)
-                        )
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = Color(0xFFF59E0B)
-                        )
-                    }
-                    Text("3 animals need attention today", color = Color(0xFF475569))
-                    Text("Milk delivery is on schedule", color = Color(0xFF475569))
-                    Text("Feed stock is under 15%", color = Color(0xFF475569))
-                }
-            }
-
-            Text(
-                text = "Main modules",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF1E293B)
-            )
-
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                items(featureCards) { feature ->
-                    FeatureCardView(feature)
-                }
-            }
-        }
+    fun update(transform: (FarmData) -> FarmData) {
+        data = transform(data)
+        store.save(data)
     }
-}
 
-@Composable
-fun StatCardView(card: StatCard) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = card.color.copy(alpha = 0.12f))
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = card.title,
-                fontSize = 14.sp,
-                color = Color(0xFF334155),
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = card.value,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
-            Text(
-                text = card.delta,
-                fontSize = 12.sp,
-                color = card.color
-            )
-        }
+    fun requestDelete(label: String, action: () -> Unit) {
+        deleteRequest = label to action
     }
-}
 
-@Composable
-fun FeatureCardView(card: FeatureCard) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color.White)
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.Start,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                imageVector = card.icon,
-                contentDescription = null,
-                tint = Color(0xFF2563EB)
-            )
-            Text(
-                text = card.title,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
-            Text(
-                text = card.subtitle,
-                fontSize = 12.sp,
-                color = Color(0xFF64748B)
-            )
-        }
-    }
-}
-
-@Composable
-fun DairyFarmManagerTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = MaterialTheme.colorScheme,
-        typography = MaterialTheme.typography,
-        content = content
+        colorScheme = if (darkMode) androidx.compose.material3.darkColorScheme() else androidx.compose.material3.lightColorScheme(
+            primary = Color(0xFF397D54), secondary = Color(0xFF8A9A5B), tertiary = Color(0xFFD4A373)
+        )
+    ) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("مدیریت گاوداری | ${screen.title}") },
+                    actions = {
+                        Text("تیره")
+                        Switch(checked = darkMode, onCheckedChange = {
+                            darkMode = it
+                            context.getSharedPreferences("farm_data", Context.MODE_PRIVATE).edit().putBoolean("dark", it).apply()
+                        })
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Spacer(Modifier.height(4.dp))
+                when (screen) {
+                    Screen.Dashboard -> Dashboard(data, onOpen = { screen = it })
+                    Screen.Animals -> Animals(data, onAdd = { animalEditor = null; showAnimalEditor = true }, onEdit = { animalEditor = it; showAnimalEditor = true }, onDelete = { id -> requestDelete("این دام") { update { value -> value.copy(animalList = value.animalList.filterNot { item -> item.id == id }, cows = (value.animalList.size - 1).coerceAtLeast(0)) } } })
+                    Screen.Milk -> Milk(data, onAdd = { editing = false; dialog = Screen.Milk }, onEdit = { editing = true; dialog = Screen.Milk }, onDelete = { requestDelete("اطلاعات تولید شیر") { update { it.copy(milk = 0) } } })
+                    Screen.Finance -> Finance(data, onAdd = { incomeEditor = null; showIncomeEditor = true }, onEdit = { incomeEditor = it; showIncomeEditor = true }, onDelete = { id -> requestDelete("این درآمد") { update { value -> val list = value.incomeList.filterNot { item -> item.id == id }; value.copy(incomeList = list, revenue = list.sumOf { item -> item.amount }) } } })
+                    Screen.Employees -> Employees(data, onAdd = { employeeEditor = null; showEmployeeEditor = true }, onEdit = { employeeEditor = it; showEmployeeEditor = true }, onDelete = { id -> requestDelete("این کارمند") { update { value -> value.copy(employeeList = value.employeeList.filterNot { item -> item.id == id }, employees = (value.employeeList.size - 1).coerceAtLeast(0)) } } })
+                    Screen.Reports -> Reports(data)
+                    Screen.Calendar -> Calendar(data, onAdd = { taskEditor = null; showTaskEditor = true }, onEdit = { taskEditor = it; showTaskEditor = true }, onDelete = { id -> requestDelete("این کار") { update { value -> value.copy(taskList = value.taskList.filterNot { item -> item.id == id }, nextTask = value.taskList.filterNot { item -> item.id == id }.firstOrNull()?.title ?: "") } } })
+                    Screen.Health -> Health(data, onAdd = { editing = false; dialog = Screen.Health }, onEdit = { editing = true; dialog = Screen.Health }, onDelete = { requestDelete("اطلاعات سلامت") { update { it.copy(healthChecks = 0) } } })
+                    Screen.Inventory -> Inventory(data, onAdd = { editing = false; dialog = Screen.Inventory }, onEdit = { editing = true; dialog = Screen.Inventory }, onDelete = { requestDelete("موجودی انبار") { update { it.copy(inventory = 0) } } })
+                    Screen.Sales -> Sales(data, onAdd = { invoiceEditor = null; showInvoiceEditor = true }, onEdit = { invoiceEditor = it; showInvoiceEditor = true }, onDelete = { id -> requestDelete("این فاکتور") { update { value -> val list = value.invoiceList.filterNot { item -> item.id == id }; value.copy(invoiceList = list, invoices = list.size, lastInvoiceCode = list.lastOrNull()?.code ?: "") } } })
+                }
+                if (screen != Screen.Dashboard) {
+                    OutlinedButton(onClick = { screen = Screen.Dashboard }, modifier = Modifier.fillMaxWidth()) {
+                        Text("بازگشت به داشبورد")
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+            }
+        }
+    }
+    }
+
+    dialog?.let { activeScreen ->
+        EntryDialog(activeScreen, editing, onDismiss = { dialog = null; editing = false }) { amount, note ->
+            when (activeScreen) {
+            Screen.Animals -> update { it.copy(cows = if (editing) amount else it.cows + amount.coerceAtLeast(1)) }
+            Screen.Milk -> update { it.copy(milk = if (editing) amount else it.milk + amount.coerceAtLeast(1)) }
+            Screen.Finance -> update { it.copy(revenue = if (editing) amount else it.revenue + amount.coerceAtLeast(0)) }
+            Screen.Employees -> update { it.copy(employees = if (editing) amount else it.employees + amount.coerceAtLeast(1)) }
+            Screen.Health -> update { it.copy(healthChecks = if (editing) amount else it.healthChecks + 1) }
+            Screen.Calendar -> update { it.copy(nextTask = note) }
+            Screen.Inventory -> update { it.copy(inventory = if (editing) amount else it.inventory + amount.coerceAtLeast(0)) }
+                Screen.Sales -> {
+                    val code = note.ifBlank { "INV-${data.invoices + 1}" }
+                    update { it.copy(invoices = it.invoices + 1, lastInvoiceCode = code) }
+                    saveInvoicePdf(context, code, amount)
+                }
+                else -> Unit
+            }
+            editing = false
+            dialog = null
+        }
+    }
+
+    if (showEmployeeEditor) {
+        EmployeeDialog(employeeEditor, onDismiss = { employeeEditor = null; showEmployeeEditor = false }) { record ->
+            update { value ->
+                val list = value.employeeList.filterNot { it.id == record.id } + record
+                value.copy(employeeList = list, employees = list.size)
+            }
+            employeeEditor = null
+            showEmployeeEditor = false
+        }
+    }
+
+    if (showAnimalEditor) {
+        AnimalDialog(animalEditor, onDismiss = { animalEditor = null; showAnimalEditor = false }) { record ->
+            update { value ->
+                val list = value.animalList.filterNot { it.id == record.id } + record
+                value.copy(animalList = list, cows = list.size)
+            }
+            animalEditor = null
+            showAnimalEditor = false
+        }
+    }
+
+    if (showInvoiceEditor) {
+        InvoiceDialog(invoiceEditor, onDismiss = { invoiceEditor = null; showInvoiceEditor = false }) { invoice ->
+            update { value ->
+                val list = value.invoiceList.filterNot { it.id == invoice.id } + invoice
+                value.copy(invoiceList = list, invoices = list.size, lastInvoiceCode = invoice.code, revenue = list.sumOf { it.total })
+            }
+            saveInvoicePdf(context, invoice.code, invoice.total)
+            invoiceEditor = null
+            showInvoiceEditor = false
+        }
+    }
+
+    if (showTaskEditor) {
+        TaskDialog(taskEditor, onDismiss = { taskEditor = null; showTaskEditor = false }) { task ->
+            update { value ->
+                val list = value.taskList.filterNot { it.id == task.id } + task
+                value.copy(taskList = list, nextTask = list.firstOrNull()?.title ?: "")
+            }
+            taskEditor = null
+            showTaskEditor = false
+        }
+    }
+
+    if (showIncomeEditor) {
+        IncomeDialog(incomeEditor, onDismiss = { incomeEditor = null; showIncomeEditor = false }) { income ->
+            update { value ->
+                val list = value.incomeList.filterNot { it.id == income.id } + income
+                value.copy(incomeList = list, revenue = list.sumOf { item -> item.amount })
+            }
+            incomeEditor = null
+            showIncomeEditor = false
+        }
+    }
+
+    deleteRequest?.let { (label, action) ->
+        AlertDialog(
+            onDismissRequest = { deleteRequest = null },
+            title = { Text("تأیید حذف") },
+            text = { Text("آیا از حذف $label مطمئن هستید؟ این عملیات قابل بازگشت نیست.") },
+            confirmButton = { TextButton(onClick = { action(); deleteRequest = null }) { Text("حذف قطعی") } },
+            dismissButton = { TextButton(onClick = { deleteRequest = null }) { Text("انصراف") } }
+        )
+    }
+}
+
+@Composable
+private fun Dashboard(data: FarmData, onOpen: (Screen) -> Unit) {
+    Text("خلاصه وضعیت امروز", fontSize = 25.sp, fontWeight = FontWeight.Bold)
+    Text("امروز: ${persianDate()}", color = Color(0xFF64748B))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+        Metric("شیر امروز", "${data.milk} لیتر", Color(0xFF168AAD), Modifier.weight(1f))
+        Metric("تعداد دام", data.cows.toString(), Color(0xFF2A9D8F), Modifier.weight(1f))
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+        Metric("درآمد", "${data.revenue} تومان", Color(0xFFE76F51), Modifier.weight(1f))
+        Metric("سفارش‌ها", data.orders.toString(), Color(0xFF6C63FF), Modifier.weight(1f))
+    }
+    SectionCard("هشدارها", Icons.Default.Warning) {
+        Text("• ${data.healthChecks} مورد نیازمند بررسی سلامت", color = Color(0xFF7C2D12))
+        Text("• موجودی خوراک را امروز کنترل کنید", color = Color(0xFF7C2D12))
+        Text("• کار بعدی: ${data.nextTask}", color = Color(0xFF334155))
+    }
+    Text("بخش‌های برنامه", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+    val screens = listOf(
+        Screen.Animals to ("دام‌ها و گوساله‌ها" to Icons.Default.Pets),
+        Screen.Milk to ("ثبت تولید شیر" to Icons.Default.LocalDrink),
+        Screen.Finance to ("درآمد و هزینه" to Icons.Default.Money),
+        Screen.Employees to ("کارکنان" to Icons.Default.AccountCircle),
+        Screen.Reports to ("گزارش‌ها" to Icons.Default.BarChart),
+        Screen.Calendar to ("تقویم کارها" to Icons.Default.CalendarToday),
+        Screen.Health to ("سلامت و واکسن" to Icons.Default.CheckCircle),
+        Screen.Inventory to ("انبارداری" to Icons.Default.Money),
+        Screen.Sales to ("فروش محصولات" to Icons.Default.LocalDrink)
+    )
+    screens.chunked(2).forEach { row ->
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            row.forEach { (target, info) ->
+                Button(onClick = { onOpen(target) }, modifier = Modifier.weight(1f)) {
+                    Icon(info.second, contentDescription = null)
+                    Text("  ${info.first}")
+                }
+            }
+            if (row.size == 1) Spacer(Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun Animals(data: FarmData, onAdd: () -> Unit, onEdit: (AnimalRecord) -> Unit, onDelete: (Long) -> Unit) {
+    DetailHeader("مدیریت دام‌ها", "پلاک، نژاد، جنسیت، تاریخ تولد و سلامت هر دام")
+    InfoCard("تعداد کل دام", "${data.animalList.size} رأس", "دام‌های ثبت‌شده")
+    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت دام جدید") }
+    if (data.animalList.isEmpty()) Text("هنوز دام ثبت نشده است.", color = Color(0xFF64748B))
+    data.animalList.forEach { animal ->
+        RecordCard(
+            title = "پلاک ${animal.tag}",
+            lines = listOf("نژاد: ${animal.breed}", "جنسیت: ${animal.gender}", "تولد: ${animal.birthDate}", "سلامت: ${animal.health}"),
+            onEdit = { onEdit(animal) }, onDelete = { onDelete(animal.id) }
+        )
+    }
+}
+
+@Composable
+private fun Milk(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    DetailHeader("تولید شیر", "ثبت شیر صبح و عصر و پیگیری تولید روزانه")
+    InfoCard("تولید امروز", "${data.milk} لیتر", "هدف روزانه: ۱٬۵۰۰ لیتر")
+    InfoCard("میانگین هر دام", "${(data.milk / data.cows.coerceAtLeast(1))} لیتر", "بر اساس دام‌های ثبت‌شده")
+    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت نوبت شیردوشی") }
+    EditDelete(onEdit, onDelete)
+}
+
+@Composable
+private fun Finance(data: FarmData, onAdd: () -> Unit, onEdit: (IncomeRecord) -> Unit, onDelete: (Long) -> Unit) {
+    DetailHeader("درآمد و حسابداری", "ثبت دقیق درآمدها و جمع واقعی از اطلاعات ثبت‌شده")
+    InfoCard("مجموع درآمد", "${data.incomeList.sumOf { it.amount }} تومان", "بر اساس ${data.incomeList.size} رکورد")
+    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت درآمد جدید") }
+    if (data.incomeList.isEmpty()) Text("هنوز درآمدی ثبت نشده است.", color = Color(0xFF64748B))
+    data.incomeList.forEach { income ->
+        RecordCard(
+            title = "${income.category} | ${income.amount} تومان",
+            lines = listOf("تاریخ: ${income.date}", "منبع: ${income.source}", "روش دریافت: ${income.method}", "توضیحات: ${income.note}"),
+            onEdit = { onEdit(income) }, onDelete = { onDelete(income.id) }
+        )
+    }
+}
+
+@Composable
+private fun Employees(data: FarmData, onAdd: () -> Unit, onEdit: (EmployeeRecord) -> Unit, onDelete: (Long) -> Unit) {
+    DetailHeader("کارکنان", "نام، سمت، تلفن و تاریخ استخدام هر نیرو")
+    InfoCard("کارکنان فعال", "${data.employeeList.size} نفر", "فهرست نیروهای ثبت‌شده")
+    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت کارمند") }
+    if (data.employeeList.isEmpty()) Text("هنوز کارمندی ثبت نشده است.", color = Color(0xFF64748B))
+    data.employeeList.forEach { employee ->
+        RecordCard(
+            title = employee.name,
+            lines = listOf("سمت: ${employee.role}", "تلفن: ${employee.phone}", "تاریخ استخدام: ${employee.hireDate}"),
+            onEdit = { onEdit(employee) }, onDelete = { onDelete(employee.id) }
+        )
+    }
+}
+
+@Composable
+private fun Reports(data: FarmData) {
+    val incomeTotal = data.incomeList.sumOf { it.amount }
+    val salesTotal = data.invoiceList.sumOf { it.total }
+    val estimatedExpenses = 0
+    DetailHeader("گزارش‌های دقیق", "خلاصه واقعی دام، تولید، فروش و حسابداری")
+    InfoCard("گزارش دام", "${data.animalList.size} رأس", "کارکنان: ${data.employeeList.size} نفر | موارد سلامت: ${data.healthChecks}")
+    InfoCard("گزارش تولید", "${data.milk} لیتر", "تولید ثبت‌شده فعلی | موجودی خوراک: ${data.inventory} واحد")
+    InfoCard("گزارش درآمد", "${incomeTotal} تومان", "${data.incomeList.size} رکورد درآمد")
+    InfoCard("گزارش فروش", "${salesTotal} تومان", "${data.invoiceList.size} فاکتور | آخرین فاکتور: ${data.lastInvoiceCode.ifBlank { "ندارد" }}")
+    InfoCard("سود و زیان", "${incomeTotal - estimatedExpenses} تومان", "درآمد: $incomeTotal | هزینه ثبت‌شده فعلی: $estimatedExpenses")
+    SectionCard("جزئیات عملیاتی", Icons.Default.BarChart) {
+        Text("فاکتورهای فروش: ${data.invoiceList.size}")
+        Text("کارهای برنامه‌ریزی‌شده: ${data.taskList.size}")
+        Text("دام‌های ثبت‌شده: ${data.animalList.size}")
+        Text("کارکنان ثبت‌شده: ${data.employeeList.size}")
+    }
+}
+
+@Composable
+private fun Calendar(data: FarmData, onAdd: () -> Unit, onEdit: (TaskRecord) -> Unit, onDelete: (Long) -> Unit) {
+    DetailHeader("تقویم و کارها", "عنوان کار و تاریخ انجام را جداگانه ثبت کنید")
+    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت کار جدید") }
+    if (data.taskList.isEmpty()) Text("هنوز کاری ثبت نشده است.", color = Color(0xFF64748B))
+    data.taskList.forEach { task ->
+        RecordCard(
+            title = task.title,
+            lines = listOf("تاریخ انجام: ${task.dueDate}", "توضیحات: ${task.note}"),
+            onEdit = { onEdit(task) }, onDelete = { onDelete(task.id) }
+        )
+    }
+}
+
+@Composable
+private fun Health(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    DetailHeader("سلامت دام‌ها", "واکسیناسیون، معاینه و پیگیری بیماری‌ها")
+    InfoCard("موارد نیازمند بررسی", data.healthChecks.toString(), "دامپزشک را مطلع کنید")
+    InfoCard("واکسیناسیون بعدی", "۱۵ مهر", "گوساله‌های جوان")
+    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت معاینه یا واکسن") }
+    EditDelete(onEdit, onDelete)
+}
+
+@Composable
+private fun Inventory(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    DetailHeader("انبارداری", "موجودی خوراک، دارو و اقلام مصرفی")
+    InfoCard("موجودی کل", "${data.inventory} واحد", "مقدار فعلی ثبت‌شده")
+    InfoCard("هشدار موجودی", if (data.inventory == 0) "موجودی ثبت نشده" else "وضعیت عادی", "برای اصلاح، ثبت جدید بزنید")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = onAdd, modifier = Modifier.weight(1f)) { Text("ثبت موجودی") }
+        OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text("ویرایش") }
+    }
+    TextButton(onClick = onDelete) { Text("حذف موجودی فعلی") }
+}
+
+@Composable
+private fun Sales(data: FarmData, onAdd: () -> Unit, onEdit: (InvoiceRecord) -> Unit, onDelete: (Long) -> Unit) {
+    DetailHeader("فروش محصولات", "ثبت فروش کامل و مدیریت فهرست فاکتورها")
+    InfoCard("تعداد فاکتورها", data.invoiceList.size.toString(), "فاکتورهای ذخیره‌شده")
+    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت فاکتور جدید") }
+    if (data.invoiceList.isEmpty()) Text("هنوز فاکتوری ثبت نشده است.", color = Color(0xFF64748B))
+    data.invoiceList.forEach { invoice ->
+        RecordCard(
+            title = "${invoice.code} | ${invoice.customer}",
+            lines = listOf("محصول: ${invoice.product}", "تعداد: ${invoice.quantity}", "قیمت واحد: ${invoice.unitPrice} تومان", "مبلغ کل: ${invoice.total} تومان", "تاریخ: ${invoice.date}", "یادداشت: ${invoice.note}"),
+            onEdit = { onEdit(invoice) }, onDelete = { onDelete(invoice.id) }
+        )
+    }
+    Text("فاکتور پس از ذخیره به‌صورت PDF در پوشه Documents برنامه ذخیره می‌شود.", color = Color(0xFF64748B), fontSize = 13.sp)
+}
+
+@Composable
+private fun EditDelete(onEdit: () -> Unit, onDelete: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text("ویرایش") }
+        TextButton(onClick = onDelete, modifier = Modifier.weight(1f)) { Text("حذف") }
+    }
+}
+
+@Composable
+private fun RecordCard(title: String, lines: List<String>, onEdit: () -> Unit, onDelete: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            lines.forEach { Text(it, color = Color(0xFF475569), fontSize = 13.sp) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text("ویرایش") }
+                TextButton(onClick = onDelete, modifier = Modifier.weight(1f)) { Text("حذف") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InvoiceDialog(existing: InvoiceRecord?, onDismiss: () -> Unit, onSave: (InvoiceRecord) -> Unit) {
+    var customer by remember { mutableStateOf(existing?.customer ?: "") }
+    var product by remember { mutableStateOf(existing?.product ?: "") }
+    var quantity by remember { mutableStateOf(existing?.quantity?.toString() ?: "") }
+    var unitPrice by remember { mutableStateOf(existing?.unitPrice?.toString() ?: "") }
+    var note by remember { mutableStateOf(existing?.note ?: "") }
+    val code = existing?.code ?: "INV-${persianDate().replace("/", "")}-${(System.currentTimeMillis() % 100000).toString().padStart(5, '0')}"
+    val total = (quantity.toIntOrNull() ?: 0) * (unitPrice.toIntOrNull() ?: 0)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (existing == null) "ثبت فاکتور فروش" else "ویرایش فاکتور ${existing.code}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                InfoCard("کد فاکتور", code, "توسط برنامه ساخته شده و تکراری نیست")
+                OutlinedTextField(customer, { customer = it }, label = { Text("نام مشتری") }, singleLine = true)
+                OutlinedTextField(product, { product = it }, label = { Text("نام محصول") }, singleLine = true)
+                OutlinedTextField(quantity, { quantity = it.filter(Char::isDigit) }, label = { Text("تعداد") }, singleLine = true)
+                OutlinedTextField(unitPrice, { unitPrice = it.filter(Char::isDigit) }, label = { Text("قیمت واحد (تومان)") }, singleLine = true)
+                Text("مبلغ کل: $total تومان", fontWeight = FontWeight.Bold, color = Color(0xFF0F766E))
+                OutlinedTextField(note, { note = it }, label = { Text("توضیحات") }, singleLine = true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (customer.isNotBlank() && product.isNotBlank() && (quantity.toIntOrNull() ?: 0) > 0) {
+                    onSave(InvoiceRecord(existing?.id ?: System.currentTimeMillis(), code, customer, product, quantity.toInt(), unitPrice.toIntOrNull() ?: 0, total, persianDate(), note))
+                }
+            }) { Text("ذخیره و ساخت PDF") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
     )
 }
 
-data class StatCard(
-    val title: String,
-    val value: String,
-    val delta: String,
-    val color: Color
-)
+@Composable
+private fun TaskDialog(existing: TaskRecord?, onDismiss: () -> Unit, onSave: (TaskRecord) -> Unit) {
+    var title by remember { mutableStateOf(existing?.title ?: "") }
+    var dueDate by remember { mutableStateOf(existing?.dueDate ?: persianDate()) }
+    var note by remember { mutableStateOf(existing?.note ?: "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (existing == null) "ثبت کار جدید" else "ویرایش کار") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(title, { title = it }, label = { Text("عنوان کار") }, singleLine = true)
+                OutlinedTextField(dueDate, { dueDate = it }, label = { Text("تاریخ انجام شمسی") }, singleLine = true)
+                OutlinedTextField(note, { note = it }, label = { Text("توضیحات") }, singleLine = true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (title.isNotBlank() && dueDate.isNotBlank()) {
+                    onSave(TaskRecord(existing?.id ?: System.currentTimeMillis(), title, dueDate, note))
+                }
+            }) { Text("ذخیره") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
+}
 
-data class FeatureCard(
-    val title: String,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector,
-    val subtitle: String
-)
+@Composable
+private fun IncomeDialog(existing: IncomeRecord?, onDismiss: () -> Unit, onSave: (IncomeRecord) -> Unit) {
+    var date by remember { mutableStateOf(existing?.date ?: persianDate()) }
+    var category by remember { mutableStateOf(existing?.category ?: "فروش شیر") }
+    var source by remember { mutableStateOf(existing?.source ?: "") }
+    var amount by remember { mutableStateOf(existing?.amount?.toString() ?: "") }
+    var method by remember { mutableStateOf(existing?.method ?: "کارت بانکی") }
+    var note by remember { mutableStateOf(existing?.note ?: "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (existing == null) "ثبت درآمد" else "ویرایش درآمد") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(date, { date = it }, label = { Text("تاریخ شمسی") }, singleLine = true)
+                OutlinedTextField(category, { category = it }, label = { Text("دسته‌بندی درآمد") }, singleLine = true)
+                OutlinedTextField(source, { source = it }, label = { Text("منبع درآمد") }, singleLine = true)
+                OutlinedTextField(amount, { amount = it.filter(Char::isDigit) }, label = { Text("مبلغ به تومان") }, singleLine = true)
+                OutlinedTextField(method, { method = it }, label = { Text("روش دریافت") }, singleLine = true)
+                OutlinedTextField(note, { note = it }, label = { Text("توضیحات و شماره پیگیری") }, singleLine = true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val parsedAmount = amount.toIntOrNull() ?: 0
+                if (category.isNotBlank() && source.isNotBlank() && parsedAmount > 0) {
+                    onSave(IncomeRecord(existing?.id ?: System.currentTimeMillis(), date, category, source, parsedAmount, method, note))
+                }
+            }) { Text("ذخیره درآمد") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
+}
+
+@Composable
+private fun EmployeeDialog(existing: EmployeeRecord?, onDismiss: () -> Unit, onSave: (EmployeeRecord) -> Unit) {
+    var name by remember { mutableStateOf(existing?.name ?: "") }
+    var role by remember { mutableStateOf(existing?.role ?: "") }
+    var phone by remember { mutableStateOf(existing?.phone ?: "") }
+    var hireDate by remember { mutableStateOf(existing?.hireDate ?: persianDate()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (existing == null) "ثبت کارمند" else "ویرایش کارمند") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text("نام و نام خانوادگی") }, singleLine = true)
+                OutlinedTextField(role, { role = it }, label = { Text("سمت یا وظیفه") }, singleLine = true)
+                OutlinedTextField(phone, { phone = it }, label = { Text("شماره تماس") }, singleLine = true)
+                OutlinedTextField(hireDate, { hireDate = it }, label = { Text("تاریخ استخدام شمسی") }, singleLine = true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (name.isNotBlank()) {
+                    onSave(EmployeeRecord(existing?.id ?: System.currentTimeMillis(), name, role, phone, hireDate))
+                }
+            }) { Text("ذخیره") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AnimalDialog(existing: AnimalRecord?, onDismiss: () -> Unit, onSave: (AnimalRecord) -> Unit) {
+    var tag by remember { mutableStateOf(existing?.tag ?: "") }
+    var breed by remember { mutableStateOf(existing?.breed ?: "") }
+    var gender by remember { mutableStateOf(existing?.gender ?: "ماده") }
+    var birthDate by remember { mutableStateOf(existing?.birthDate ?: persianDate()) }
+    var health by remember { mutableStateOf(existing?.health ?: "سالم") }
+    var genderExpanded by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (existing == null) "ثبت دام" else "ویرایش دام") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(tag, { tag = it }, label = { Text("پلاک دام") }, singleLine = true)
+                OutlinedTextField(breed, { breed = it }, label = { Text("نژاد") }, singleLine = true)
+                ExposedDropdownMenuBox(expanded = genderExpanded, onExpandedChange = { genderExpanded = !genderExpanded }) {
+                    OutlinedTextField(
+                        value = gender,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("جنسیت") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = genderExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = genderExpanded, onDismissRequest = { genderExpanded = false }) {
+                        listOf("ماده", "نر").forEach { option ->
+                            DropdownMenuItem(text = { Text(option) }, onClick = {
+                                gender = option
+                                genderExpanded = false
+                            })
+                        }
+                    }
+                }
+                OutlinedTextField(birthDate, { birthDate = it }, label = { Text("تاریخ تولد شمسی") }, singleLine = true)
+                OutlinedTextField(health, { health = it }, label = { Text("وضعیت سلامت") }, singleLine = true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (tag.isNotBlank()) {
+                    onSave(AnimalRecord(existing?.id ?: System.currentTimeMillis(), tag, breed, gender, birthDate, health))
+                }
+            }) { Text("ذخیره") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
+}
+
+private fun persianDate(): String {
+    val calendar = Calendar.getInstance()
+    val (year, month, day) = gregorianToJalali(
+        calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH) + 1, calendar.get(Calendar.DAY_OF_MONTH)
+    )
+    return String.format(Locale.US, "%04d/%02d/%02d", year, month, day)
+}
+
+private fun gregorianToJalali(gyInput: Int, gmInput: Int, gdInput: Int): Triple<Int, Int, Int> {
+    val monthDays = intArrayOf(0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+    var gy = gyInput - 1600
+    val gm = gmInput - 1
+    val gd = gdInput - 1
+    var dayNumber = 365 * gy + (gy + 3) / 4 - (gy + 99) / 100 + (gy + 399) / 400
+    dayNumber += monthDays[gm] + gd
+    if (gm > 1 && (gyInput % 4 == 0 && gyInput % 100 != 0 || gyInput % 400 == 0)) dayNumber++
+    var jalaliDay = dayNumber - 79
+    val cycle = jalaliDay / 12053
+    jalaliDay %= 12053
+    var jy = 979 + 33 * cycle + 4 * (jalaliDay / 1461)
+    jalaliDay %= 1461
+    if (jalaliDay >= 366) {
+        jy += (jalaliDay - 1) / 365
+        jalaliDay = (jalaliDay - 1) % 365
+    }
+    val jm = if (jalaliDay < 186) 1 + jalaliDay / 31 else 7 + (jalaliDay - 186) / 30
+    val jd = 1 + if (jalaliDay < 186) jalaliDay % 31 else (jalaliDay - 186) % 30
+    return Triple(jy, jm, jd)
+}
+
+private fun notifyFarmAlerts(context: Context, data: FarmData) {
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    val channelId = "farm_alerts"
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        manager.createNotificationChannel(NotificationChannel(channelId, "هشدارهای گاوداری", NotificationManager.IMPORTANCE_HIGH))
+    }
+    val messages = buildList {
+        if (data.healthChecks > 0) add("${data.healthChecks} مورد سلامت دام نیازمند بررسی است")
+        if (data.inventory == 0) add("موجودی انبار ثبت نشده یا تمام شده است")
+    }
+    if (messages.isEmpty()) return
+    val notification = NotificationCompat.Builder(context, channelId)
+        .setSmallIcon(android.R.drawable.ic_dialog_alert)
+        .setContentTitle("هشدار مدیریت گاوداری")
+        .setContentText(messages.first())
+        .setStyle(NotificationCompat.BigTextStyle().bigText(messages.joinToString("\n")))
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setAutoCancel(true)
+        .build()
+    try {
+        NotificationManagerCompat.from(context).notify(1001, notification)
+    } catch (_: SecurityException) {
+        // Permission request is handled by MainActivity on Android 13+.
+    }
+}
+
+private fun saveInvoicePdf(context: Context, code: String, amount: Int) {
+    val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
+    directory.mkdirs()
+    val file = File(directory, "invoice-$code.pdf")
+    val document = PdfDocument()
+    val page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
+    val paint = android.graphics.Paint().apply { textSize = 20f; color = android.graphics.Color.DKGRAY }
+    page.canvas.drawText("Dairy Farm Manager", 380f, 70f, paint)
+    page.canvas.drawText("Invoice: $code", 380f, 120f, paint)
+    page.canvas.drawText("Date: ${persianDate()}", 380f, 170f, paint)
+    page.canvas.drawText("Product sale total: $amount toman", 380f, 240f, paint)
+    page.canvas.drawText("Saved on device", 380f, 300f, paint)
+    document.finishPage(page)
+    file.outputStream().use { document.writeTo(it) }
+    document.close()
+    Toast.makeText(context, "فاکتور در فایل PDF ذخیره شد", Toast.LENGTH_LONG).show()
+}
+
+@Composable
+private fun DetailHeader(title: String, subtitle: String) {
+    Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+    Text(subtitle, color = Color(0xFF64748B))
+}
+
+@Composable
+private fun Metric(title: String, value: String, color: Color, modifier: Modifier) {
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.14f))) {
+        Column(Modifier.padding(14.dp)) {
+            Text(title, fontSize = 13.sp, color = Color(0xFF475569))
+            Text(value, fontSize = 19.sp, fontWeight = FontWeight.Bold, color = color)
+        }
+    }
+}
+
+@Composable
+private fun InfoCard(title: String, value: String, detail: String) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(title, fontWeight = FontWeight.Bold)
+            Text(value, fontSize = 21.sp, color = Color(0xFF0F766E), fontWeight = FontWeight.Bold)
+            Text(detail, color = Color(0xFF64748B), fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
+private fun SectionCard(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBEB))) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(icon, contentDescription = null, tint = Color(0xFFD97706))
+                Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun EntryDialog(screen: Screen, editing: Boolean, onDismiss: () -> Unit, onSave: (Int, String) -> Unit) {
+    var amount by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    val needsAmount = screen != Screen.Calendar && screen != Screen.Health
+    val amountLabel = when (screen) {
+        Screen.Milk -> "مقدار تولید شیر (لیتر)"
+        Screen.Finance -> "مبلغ (تومان)"
+        Screen.Inventory -> "مقدار موجودی"
+        Screen.Sales -> "مبلغ فاکتور (تومان)"
+        Screen.Animals -> "تعداد دام"
+        Screen.Employees -> "تعداد نیرو"
+        else -> "مقدار"
+    }
+    val noteLabel = when (screen) {
+        Screen.Milk -> "شیفت یا توضیحات تولید"
+        Screen.Finance -> "نوع تراکنش و توضیحات"
+        Screen.Inventory -> "نام قلم انبار"
+        Screen.Sales -> "کد فاکتور"
+        Screen.Calendar -> "عنوان کار و تاریخ انجام"
+        Screen.Health -> "شرح معاینه یا واکسن"
+        else -> "توضیحات"
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("ثبت اطلاعات: ${screen.title}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (needsAmount) {
+                    OutlinedTextField(
+                        value = amount,
+                        onValueChange = { amount = it.filter(Char::isDigit) },
+                        label = { Text(amountLabel) },
+                        singleLine = true
+                    )
+                }
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text(noteLabel) },
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(amount.toIntOrNull() ?: 0, note) }) { Text("ذخیره") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
+}
+

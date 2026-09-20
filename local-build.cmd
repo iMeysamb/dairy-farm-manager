@@ -1,14 +1,16 @@
 @echo off
 setlocal
-set JAVA_HOME=C:\Program Files\Microsoft\jdk-17
+set "JAVA_HOME="
+if exist "C:\Program Files\Microsoft\jdk-17\bin\java.exe" set "JAVA_HOME=C:\Program Files\Microsoft\jdk-17"
+if not defined JAVA_HOME for /d %%J in ("C:\Program Files\Microsoft\jdk-17.*") do if exist "%%~fJ\bin\java.exe" if not defined JAVA_HOME set "JAVA_HOME=%%~fJ"
 set ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk
 set ANDROID_SDK_ROOT=%LOCALAPPDATA%\Android\Sdk
 set PATH=%JAVA_HOME%\bin;%ANDROID_HOME%\platform-tools;%ANDROID_HOME%\cmdline-tools\latest\bin;%PATH%
 cd /d "%~dp0"
-if exist "%JAVA_HOME%\bin\java.exe" (
+if defined JAVA_HOME (
   echo Using Java: %JAVA_HOME%
 ) else (
-  echo Java 17 was not found at %JAVA_HOME%
+  echo Java 17 was not found under C:\Program Files\Microsoft
   echo Install Microsoft OpenJDK 17 first.
   exit /b 1
 )
