@@ -3,6 +3,7 @@ package com.example.dairyfarmmanager
 import android.content.Context
 import android.content.BroadcastReceiver
 import android.content.Intent
+import android.net.Uri
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.Manifest
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.LocalDrink
 import androidx.compose.material.icons.filled.Money
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -74,6 +76,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
+import androidx.core.content.FileProvider
 import java.util.Calendar
 import java.util.Locale
 
@@ -617,7 +620,7 @@ private fun Animals(data: FarmData, onAdd: () -> Unit, onEdit: (AnimalRecord) ->
     data.animalList.forEach { animal ->
         RecordCard(
             title = "پلاک ${animal.tag}",
-            lines = listOf("نژاد: ${animal.breed}", "جنسیت: ${animal.gender}", "تولد: ${animal.birthDate}", "سلامت: ${animal.health}"),
+            lines = listOf("پروفایل: ${animal.breed} | ${animal.gender}", "تولد: ${animal.birthDate}", "سلامت: ${animal.health}"),
             onEdit = { onEdit(animal) }, onDelete = { onDelete(animal.id) }
         )
     }
@@ -663,16 +666,29 @@ private fun Finance(data: FarmData, onAdd: () -> Unit, onEdit: (IncomeRecord) ->
 
 @Composable
 private fun Employees(data: FarmData, onAdd: () -> Unit, onEdit: (EmployeeRecord) -> Unit, onDelete: (Long) -> Unit) {
+    val context = LocalContext.current
     DetailHeader("کارکنان", "نام، سمت، تلفن و تاریخ استخدام هر نیرو")
     InfoCard("کارکنان فعال", "${data.employeeList.size} نفر", "فهرست نیروهای ثبت‌شده")
     Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت کارمند") }
     if (data.employeeList.isEmpty()) Text("هنوز کارمندی ثبت نشده است.", color = Color(0xFF64748B))
     data.employeeList.forEach { employee ->
-        RecordCard(
-            title = employee.name,
-            lines = listOf("سمت: ${employee.role}", "تلفن: ${employee.phone}", "تاریخ استخدام: ${employee.hireDate}"),
-            onEdit = { onEdit(employee) }, onDelete = { onDelete(employee.id) }
-        )
+        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(employee.name, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { openPhoneDialer(context, employee.phone) }) {
+                        Icon(Icons.Default.Phone, contentDescription = "تماس", tint = Color(0xFF16A34A))
+                    }
+                }
+                Text("سمت: ${employee.role}", color = Color(0xFF475569), fontSize = 13.sp)
+                Text("تلفن: ${employee.phone}", color = Color(0xFF475569), fontSize = 13.sp)
+                Text("تاریخ استخدام: ${employee.hireDate}", color = Color(0xFF475569), fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { onEdit(employee) }, modifier = Modifier.weight(1f)) { Text("پروفایل") }
+                    TextButton(onClick = { onDelete(employee.id) }, modifier = Modifier.weight(1f)) { Text("حذف") }
+                }
+            }
+        }
     }
 }
 
@@ -810,6 +826,10 @@ private fun MonthlyMilkReport(data: FarmData) {
             onClick = { saveMonthlyMilkPdf(context, month, monthTotal, recordedDays, weeklyTotals, dailyTotals) },
             modifier = Modifier.fillMaxWidth()
         ) { Text("ذخیره گزارش ماهانه به‌صورت PDF") }
+        OutlinedButton(
+            onClick = { shareMonthlyMilkPdf(context, month, monthTotal, recordedDays, weeklyTotals, dailyTotals) },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("اشتراک‌گذاری گزارش ماهانه") }
     }
 }
 
@@ -857,6 +877,9 @@ private fun Inventory(data: FarmData, onAdd: () -> Unit, onEdit: (InventoryRecor
             Button(onClick = { saveInventoryPdf(context, currentMonth, monthRecords) }, modifier = Modifier.fillMaxWidth()) {
                 Text("ذخیره آمار انبار این ماه به‌صورت PDF")
             }
+            OutlinedButton(onClick = { shareInventoryPdf(context, currentMonth, monthRecords) }, modifier = Modifier.fillMaxWidth()) {
+                Text("اشتراک‌گذاری گزارش انبار")
+            }
             Text("آمار روزانه", fontWeight = FontWeight.Bold)
             monthRecords.groupBy { it.date }.toSortedMap().forEach { (date, records) ->
                 val incoming = records.filter { it.movement == "ورود" }.sumOf { it.totalWeight }
@@ -879,6 +902,7 @@ private fun Inventory(data: FarmData, onAdd: () -> Unit, onEdit: (InventoryRecor
 
 @Composable
 private fun Sales(data: FarmData, onAdd: () -> Unit, onEdit: (InvoiceRecord) -> Unit, onDelete: (Long) -> Unit) {
+    val context = LocalContext.current
     DetailHeader("فروش محصولات", "ثبت فروش کامل و مدیریت فهرست فاکتورها")
     InfoCard("تعداد فاکتورها", data.invoiceList.size.toString(), "فاکتورهای ذخیره‌شده")
     Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت فاکتور جدید") }
@@ -889,6 +913,9 @@ private fun Sales(data: FarmData, onAdd: () -> Unit, onEdit: (InvoiceRecord) -> 
             lines = listOf("محصول: ${invoice.product}", "تعداد: ${invoice.quantity}", "قیمت واحد: ${invoice.unitPrice} تومان", "مبلغ کل: ${invoice.total} تومان", "تاریخ: ${invoice.date}", "یادداشت: ${invoice.note}"),
             onEdit = { onEdit(invoice) }, onDelete = { onDelete(invoice.id) }
         )
+        TextButton(onClick = { shareInvoicePdf(context, invoice.code, invoice.total) }, modifier = Modifier.fillMaxWidth()) {
+            Text("اشتراک‌گذاری PDF فاکتور ${invoice.code}")
+        }
     }
     Text("فاکتور پس از ذخیره به‌صورت PDF در پوشه Documents برنامه ذخیره می‌شود.", color = Color(0xFF64748B), fontSize = 13.sp)
 }
@@ -1105,7 +1132,7 @@ private fun EmployeeDialog(existing: EmployeeRecord?, onDismiss: () -> Unit, onS
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("نام و نام خانوادگی") }, singleLine = true)
                 OutlinedTextField(role, { role = it }, label = { Text("سمت یا وظیفه") }, singleLine = true)
-                OutlinedTextField(phone, { phone = it }, label = { Text("شماره تماس") }, singleLine = true)
+                OutlinedTextField(phone, { phone = it.filter { character -> character.isDigit() || character == '+' } }, label = { Text("شماره تماس") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), singleLine = true)
                 OutlinedTextField(hireDate, { hireDate = it }, label = { Text("تاریخ استخدام شمسی") }, singleLine = true)
             }
         },
@@ -1282,7 +1309,7 @@ private fun showAlarmNotification(context: Context, message: String) {
     }
 }
 
-private fun saveInventoryPdf(context: Context, month: String, records: List<InventoryRecord>) {
+private fun saveInventoryPdf(context: Context, month: String, records: List<InventoryRecord>): File {
     val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
     directory.mkdirs()
     val file = File(directory, "inventory-report-$month.pdf")
@@ -1311,6 +1338,11 @@ private fun saveInventoryPdf(context: Context, month: String, records: List<Inve
     file.outputStream().use { document.writeTo(it) }
     document.close()
     Toast.makeText(context, "گزارش انبار در PDF ذخیره شد", Toast.LENGTH_LONG).show()
+    return file
+}
+
+private fun shareInventoryPdf(context: Context, month: String, records: List<InventoryRecord>) {
+    sharePdfFile(context, saveInventoryPdf(context, month, records), "گزارش انبار $month")
 }
 
 private fun saveMonthlyMilkPdf(
@@ -1320,7 +1352,7 @@ private fun saveMonthlyMilkPdf(
     recordedDays: Int,
     weeklyTotals: Map<String, Map<String, Int>>,
     dailyTotals: Map<String, Map<String, Int>>
-) {
+): File {
     val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
     directory.mkdirs()
     val file = File(directory, "milk-report-$month.pdf")
@@ -1358,9 +1390,21 @@ private fun saveMonthlyMilkPdf(
     file.outputStream().use { document.writeTo(it) }
     document.close()
     Toast.makeText(context, "گزارش ماهانه در PDF ذخیره شد", Toast.LENGTH_LONG).show()
+    return file
 }
 
-private fun saveInvoicePdf(context: Context, code: String, amount: Int) {
+private fun shareMonthlyMilkPdf(
+    context: Context,
+    month: String,
+    monthTotal: Map<String, Int>,
+    recordedDays: Int,
+    weeklyTotals: Map<String, Map<String, Int>>,
+    dailyTotals: Map<String, Map<String, Int>>
+) {
+    sharePdfFile(context, saveMonthlyMilkPdf(context, month, monthTotal, recordedDays, weeklyTotals, dailyTotals), "گزارش ماهانه شیر")
+}
+
+private fun saveInvoicePdf(context: Context, code: String, amount: Int): File {
     val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
     directory.mkdirs()
     val file = File(directory, "invoice-$code.pdf")
@@ -1376,6 +1420,27 @@ private fun saveInvoicePdf(context: Context, code: String, amount: Int) {
     file.outputStream().use { document.writeTo(it) }
     document.close()
     Toast.makeText(context, "فاکتور در فایل PDF ذخیره شد", Toast.LENGTH_LONG).show()
+    return file
+}
+
+private fun shareInvoicePdf(context: Context, code: String, amount: Int) {
+    sharePdfFile(context, saveInvoicePdf(context, code, amount), "فاکتور $code")
+}
+
+private fun sharePdfFile(context: Context, file: File, title: String) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/pdf"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_TITLE, title)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(shareIntent, "اشتراک‌گذاری $title"))
+}
+
+private fun openPhoneDialer(context: Context, phone: String) {
+    if (phone.isBlank()) return
+    context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(phone)}")))
 }
 
 @Composable
