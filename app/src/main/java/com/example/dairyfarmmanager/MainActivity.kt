@@ -738,16 +738,22 @@ private fun Inventory(data: FarmData, onAdd: () -> Unit, onEdit: (InventoryRecor
         InfoCard("خروج این ماه", "$monthOut کیلو", "${monthRecords.count { it.movement == "خروج" }} تراکنش")
     }
     Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت ورود یا خروج") }
-    Button(onClick = { saveInventoryPdf(context, currentMonth, monthRecords) }, modifier = Modifier.fillMaxWidth()) {
-        Text("ذخیره آمار انبار این ماه به‌صورت PDF")
+    if (monthRecords.isEmpty()) {
+        Text("برای این ماه هنوز گزارشی ثبت نشده است.", color = Color(0xFF64748B))
+    } else {
+        SectionCard("گزارش ماه $currentMonth", Icons.Default.BarChart) {
+            Button(onClick = { saveInventoryPdf(context, currentMonth, monthRecords) }, modifier = Modifier.fillMaxWidth()) {
+                Text("ذخیره آمار انبار این ماه به‌صورت PDF")
+            }
+            Text("آمار روزانه", fontWeight = FontWeight.Bold)
+            monthRecords.groupBy { it.date }.toSortedMap().forEach { (date, records) ->
+                val incoming = records.filter { it.movement == "ورود" }.sumOf { it.totalWeight }
+                val outgoing = records.filter { it.movement == "خروج" }.sumOf { it.totalWeight }
+                Text("$date | ورود: $incoming کیلو | خروج: $outgoing کیلو")
+            }
+            Text("آمار کلی ماه: ورود $monthIn کیلو | خروج $monthOut کیلو | خالص ${monthIn - monthOut} کیلو", fontWeight = FontWeight.Bold)
+        }
     }
-    Text("آمار روزانه ماه $currentMonth", fontWeight = FontWeight.Bold)
-    monthRecords.groupBy { it.date }.toSortedMap().forEach { (date, records) ->
-        val incoming = records.filter { it.movement == "ورود" }.sumOf { it.totalWeight }
-        val outgoing = records.filter { it.movement == "خروج" }.sumOf { it.totalWeight }
-        Text("$date | ورود: $incoming کیلو | خروج: $outgoing کیلو")
-    }
-    Text("آمار کلی ماه: ورود $monthIn کیلو | خروج $monthOut کیلو | خالص ${monthIn - monthOut} کیلو", fontWeight = FontWeight.Bold)
     if (data.inventoryList.isEmpty()) Text("هنوز تراکنش انبار ثبت نشده است.", color = Color(0xFF64748B))
     data.inventoryList.sortedByDescending { it.id }.forEach { record ->
         RecordCard(
