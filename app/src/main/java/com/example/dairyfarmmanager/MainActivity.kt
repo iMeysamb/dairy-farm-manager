@@ -1047,7 +1047,7 @@ private fun EntryDialog(screen: Screen, editing: Boolean, onDismiss: () -> Unit,
     var unitExpanded by remember { mutableStateOf(false) }
     val needsAmount = screen != Screen.Calendar && screen != Screen.Health
     val amountLabel = when (screen) {
-        Screen.Milk -> "مقدار تولید شیر (لیتر)"
+        Screen.Milk -> "مقدار تولید شیر ($unit)"
         Screen.Finance -> "مبلغ (تومان)"
         Screen.Inventory -> "مقدار موجودی"
         Screen.Sales -> "مبلغ فاکتور (تومان)"
