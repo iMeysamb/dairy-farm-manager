@@ -108,7 +108,8 @@ private data class FarmData(
     val invoiceList: List<InvoiceRecord>,
     val taskList: List<TaskRecord>,
     val incomeList: List<IncomeRecord>,
-    val milkList: List<MilkRecord>
+    val milkList: List<MilkRecord>,
+    val inventoryList: List<InventoryRecord>
 )
 
 private data class MilkRecord(
@@ -116,6 +117,16 @@ private data class MilkRecord(
     val date: String,
     val amount: Int,
     val unit: String,
+    val note: String
+)
+
+private data class InventoryRecord(
+    val id: Long,
+    val date: String,
+    val product: String,
+    val movement: String,
+    val bags: Int,
+    val totalWeight: Int,
     val note: String
 )
 
@@ -183,7 +194,8 @@ private class FarmStore(context: Context) {
             decodeInvoices(preferences.getString("invoice_list", "") ?: ""),
             decodeTasks(preferences.getString("task_list", "") ?: ""),
             decodeIncome(preferences.getString("income_list", "") ?: ""),
-            decodeMilk(preferences.getString("milk_list", "") ?: "")
+            decodeMilk(preferences.getString("milk_list", "") ?: ""),
+            decodeInventory(preferences.getString("inventory_list", "") ?: "")
         )
     }
 
@@ -205,6 +217,7 @@ private class FarmStore(context: Context) {
             .putString("task_list", encodeTasks(data.taskList))
             .putString("income_list", encodeIncome(data.incomeList))
             .putString("milk_list", encodeMilk(data.milkList))
+            .putString("inventory_list", encodeInventory(data.inventoryList))
             .apply()
     }
 
@@ -274,6 +287,19 @@ private class FarmStore(context: Context) {
             else -> null
         }
     }
+
+    private fun encodeInventory(items: List<InventoryRecord>) = items.joinToString(";;") {
+        listOf(it.id, it.date, it.product, it.movement, it.bags, it.totalWeight, it.note)
+            .joinToString("|") { value -> value.toString().replace("|", " ").replace(";", " ") }
+    }
+
+    private fun decodeInventory(value: String) = value.split(";;").filter { it.isNotBlank() }.mapNotNull { row ->
+        val parts = row.split("|")
+        if (parts.size == 7) InventoryRecord(
+            parts[0].toLongOrNull() ?: 0L, parts[1], parts[2], parts[3],
+            parts[4].toIntOrNull() ?: 0, parts[5].toIntOrNull() ?: 0, parts[6]
+        ) else null
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -295,10 +321,12 @@ private fun DairyFarmApp() {
     var showTaskEditor by remember { mutableStateOf(false) }
     var incomeEditor by remember { mutableStateOf<IncomeRecord?>(null) }
     var showIncomeEditor by remember { mutableStateOf(false) }
+    var inventoryEditor by remember { mutableStateOf<InventoryRecord?>(null) }
+    var showInventoryEditor by remember { mutableStateOf(false) }
     var deleteRequest by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var darkMode by remember { mutableStateOf(context.getSharedPreferences("farm_data", Context.MODE_PRIVATE).getBoolean("dark", false)) }
 
-    BackHandler(enabled = dialog != null || showEmployeeEditor || showAnimalEditor || showInvoiceEditor || showTaskEditor || showIncomeEditor || screen != Screen.Dashboard) {
+    BackHandler(enabled = dialog != null || showEmployeeEditor || showAnimalEditor || showInvoiceEditor || showTaskEditor || showIncomeEditor || showInventoryEditor || screen != Screen.Dashboard) {
         when {
             deleteRequest != null -> deleteRequest = null
             dialog != null -> { dialog = null; editing = false }
@@ -307,6 +335,7 @@ private fun DairyFarmApp() {
             showInvoiceEditor -> { invoiceEditor = null; showInvoiceEditor = false }
             showTaskEditor -> { taskEditor = null; showTaskEditor = false }
             showIncomeEditor -> { incomeEditor = null; showIncomeEditor = false }
+            showInventoryEditor -> { inventoryEditor = null; showInventoryEditor = false }
             screen != Screen.Dashboard -> screen = Screen.Dashboard
         }
     }
@@ -355,7 +384,12 @@ private fun DairyFarmApp() {
                     Screen.Reports -> Reports(data)
                     Screen.Calendar -> Calendar(data, onAdd = { taskEditor = null; showTaskEditor = true }, onEdit = { taskEditor = it; showTaskEditor = true }, onDelete = { id -> requestDelete("این کار") { update { value -> value.copy(taskList = value.taskList.filterNot { item -> item.id == id }, nextTask = value.taskList.filterNot { item -> item.id == id }.firstOrNull()?.title ?: "") } } })
                     Screen.Health -> Health(data, onAdd = { editing = false; dialog = Screen.Health }, onEdit = { editing = true; dialog = Screen.Health }, onDelete = { requestDelete("اطلاعات سلامت") { update { it.copy(healthChecks = 0) } } })
-                    Screen.Inventory -> Inventory(data, onAdd = { editing = false; dialog = Screen.Inventory }, onEdit = { editing = true; dialog = Screen.Inventory }, onDelete = { requestDelete("موجودی انبار") { update { it.copy(inventory = 0) } } })
+                    Screen.Inventory -> Inventory(
+                        data,
+                        onAdd = { inventoryEditor = null; showInventoryEditor = true },
+                        onEdit = { inventoryEditor = it; showInventoryEditor = true },
+                        onDelete = { id -> requestDelete("این تراکنش انبار") { update { value -> value.copy(inventoryList = value.inventoryList.filterNot { item -> item.id == id }) } } }
+                    )
                     Screen.Sales -> Sales(data, onAdd = { invoiceEditor = null; showInvoiceEditor = true }, onEdit = { invoiceEditor = it; showInvoiceEditor = true }, onDelete = { id -> requestDelete("این فاکتور") { update { value -> val list = value.invoiceList.filterNot { item -> item.id == id }; value.copy(invoiceList = list, invoices = list.size, lastInvoiceCode = list.lastOrNull()?.code ?: "") } } })
                 }
                 if (screen != Screen.Dashboard) {
@@ -382,7 +416,7 @@ private fun DairyFarmApp() {
             Screen.Employees -> update { it.copy(employees = if (editing) amount else it.employees + amount.coerceAtLeast(1)) }
             Screen.Health -> update { it.copy(healthChecks = if (editing) amount else it.healthChecks + 1) }
             Screen.Calendar -> update { it.copy(nextTask = note) }
-            Screen.Inventory -> update { it.copy(inventory = if (editing) amount else it.inventory + amount.coerceAtLeast(0)) }
+            Screen.Inventory -> Unit
                 Screen.Sales -> {
                     val code = note.ifBlank { "INV-${data.invoices + 1}" }
                     update { it.copy(invoices = it.invoices + 1, lastInvoiceCode = code) }
@@ -448,6 +482,21 @@ private fun DairyFarmApp() {
             }
             incomeEditor = null
             showIncomeEditor = false
+        }
+    }
+
+    if (showInventoryEditor) {
+        InventoryDialog(inventoryEditor, onDismiss = { inventoryEditor = null; showInventoryEditor = false }) { record ->
+            update { value ->
+                val list = value.inventoryList.filterNot { it.id == record.id } + record
+                value.copy(
+                    inventoryList = list,
+                    inventory = list.sumOf { item -> if (item.movement == "ورود") item.totalWeight else -item.totalWeight }
+                        .coerceAtLeast(0)
+                )
+            }
+            inventoryEditor = null
+            showInventoryEditor = false
         }
     }
 
@@ -675,15 +724,38 @@ private fun Health(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDele
 }
 
 @Composable
-private fun Inventory(data: FarmData, onAdd: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
-    DetailHeader("انبارداری", "موجودی خوراک، دارو و اقلام مصرفی")
-    InfoCard("موجودی کل", "${data.inventory} واحد", "مقدار فعلی ثبت‌شده")
-    InfoCard("هشدار موجودی", if (data.inventory == 0) "موجودی ثبت نشده" else "وضعیت عادی", "برای اصلاح، ثبت جدید بزنید")
+private fun Inventory(data: FarmData, onAdd: () -> Unit, onEdit: (InventoryRecord) -> Unit, onDelete: (Long) -> Unit) {
+    val context = LocalContext.current
+    val currentMonth = persianDate().substringBeforeLast("/")
+    val monthRecords = data.inventoryList.filter { it.date.startsWith("$currentMonth/") }
+    val monthIn = monthRecords.filter { it.movement == "ورود" }.sumOf { it.totalWeight }
+    val monthOut = monthRecords.filter { it.movement == "خروج" }.sumOf { it.totalWeight }
+    DetailHeader("انبارداری", "ورود و خروج محصولات و خوراک با گزارش روزانه و ماهانه")
+    InfoCard("موجودی فعلی", "${data.inventory} کیلو", "محاسبه‌شده از ورود و خروج ثبت‌شده")
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        Button(onClick = onAdd, modifier = Modifier.weight(1f)) { Text("ثبت موجودی") }
-        OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text("ویرایش") }
+        InfoCard("ورود این ماه", "$monthIn کیلو", "${monthRecords.count { it.movement == "ورود" }} تراکنش")
+        InfoCard("خروج این ماه", "$monthOut کیلو", "${monthRecords.count { it.movement == "خروج" }} تراکنش")
     }
-    TextButton(onClick = onDelete) { Text("حذف موجودی فعلی") }
+    Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ ثبت ورود یا خروج") }
+    Button(onClick = { saveInventoryPdf(context, currentMonth, monthRecords) }, modifier = Modifier.fillMaxWidth()) {
+        Text("ذخیره آمار انبار این ماه به‌صورت PDF")
+    }
+    Text("آمار روزانه ماه $currentMonth", fontWeight = FontWeight.Bold)
+    monthRecords.groupBy { it.date }.toSortedMap().forEach { (date, records) ->
+        val incoming = records.filter { it.movement == "ورود" }.sumOf { it.totalWeight }
+        val outgoing = records.filter { it.movement == "خروج" }.sumOf { it.totalWeight }
+        Text("$date | ورود: $incoming کیلو | خروج: $outgoing کیلو")
+    }
+    Text("آمار کلی ماه: ورود $monthIn کیلو | خروج $monthOut کیلو | خالص ${monthIn - monthOut} کیلو", fontWeight = FontWeight.Bold)
+    if (data.inventoryList.isEmpty()) Text("هنوز تراکنش انبار ثبت نشده است.", color = Color(0xFF64748B))
+    data.inventoryList.sortedByDescending { it.id }.forEach { record ->
+        RecordCard(
+            title = "${record.movement} | ${record.product} | ${record.date}",
+            lines = listOf("تعداد کیسه: ${record.bags}", "وزن کلی: ${record.totalWeight} کیلو", "توضیحات: ${record.note.ifBlank { "بدون توضیح" }}"),
+            onEdit = { onEdit(record) },
+            onDelete = { onDelete(record.id) }
+        )
+    }
 }
 
 @Composable
@@ -753,6 +825,90 @@ private fun InvoiceDialog(existing: InvoiceRecord?, onDismiss: () -> Unit, onSav
                     onSave(InvoiceRecord(existing?.id ?: System.currentTimeMillis(), code, customer, product, quantity.toInt(), unitPrice.toIntOrNull() ?: 0, total, persianDate(), note))
                 }
             }) { Text("ذخیره و ساخت PDF") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InventoryDialog(existing: InventoryRecord?, onDismiss: () -> Unit, onSave: (InventoryRecord) -> Unit) {
+    val products = listOf("ذرت", "جو", "کنسانتره", "یونجه", "کاه", "دارو", "واکسن", "سایر")
+    var product by remember { mutableStateOf(existing?.product ?: products.first()) }
+    var movement by remember { mutableStateOf(existing?.movement ?: "ورود") }
+    var bags by remember { mutableStateOf(existing?.bags?.toString() ?: "") }
+    var totalWeight by remember { mutableStateOf(existing?.totalWeight?.toString() ?: "") }
+    var note by remember { mutableStateOf(existing?.note ?: "") }
+    var productExpanded by remember { mutableStateOf(false) }
+    var movementExpanded by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (existing == null) "ثبت ورود یا خروج انبار" else "ویرایش تراکنش انبار") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ExposedDropdownMenuBox(expanded = productExpanded, onExpandedChange = { productExpanded = !productExpanded }) {
+                    OutlinedTextField(
+                        value = product,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("انتخاب محصول") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = productExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = productExpanded, onDismissRequest = { productExpanded = false }) {
+                        products.forEach { option ->
+                            DropdownMenuItem(text = { Text(option) }, onClick = {
+                                product = option
+                                productExpanded = false
+                            })
+                        }
+                    }
+                }
+                ExposedDropdownMenuBox(expanded = movementExpanded, onExpandedChange = { movementExpanded = !movementExpanded }) {
+                    OutlinedTextField(
+                        value = movement,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("نوع تراکنش") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = movementExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = movementExpanded, onDismissRequest = { movementExpanded = false }) {
+                        listOf("ورود", "خروج").forEach { option ->
+                            DropdownMenuItem(text = { Text(option) }, onClick = {
+                                movement = option
+                                movementExpanded = false
+                            })
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = bags,
+                    onValueChange = { bags = it.filter(Char::isDigit) },
+                    label = { Text("تعداد کیسه‌ها") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = totalWeight,
+                    onValueChange = { totalWeight = it.filter(Char::isDigit) },
+                    label = { Text("وزن کلی تمام کیسه‌ها (کیلو)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(note, { note = it }, label = { Text("توضیحات") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val parsedBags = bags.toIntOrNull() ?: 0
+                val parsedWeight = totalWeight.toIntOrNull() ?: 0
+                if (parsedBags > 0 && parsedWeight > 0) {
+                    onSave(InventoryRecord(existing?.id ?: System.currentTimeMillis(), existing?.date ?: persianDate(), product, movement, parsedBags, parsedWeight, note))
+                }
+            }) { Text("ذخیره") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
     )
@@ -948,6 +1104,37 @@ private fun notifyFarmAlerts(context: Context, data: FarmData) {
     } catch (_: SecurityException) {
         // Permission request is handled by MainActivity on Android 13+.
     }
+}
+
+private fun saveInventoryPdf(context: Context, month: String, records: List<InventoryRecord>) {
+    val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
+    directory.mkdirs()
+    val file = File(directory, "inventory-report-$month.pdf")
+    val document = PdfDocument()
+    val page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
+    val paint = android.graphics.Paint().apply { textSize = 15f; color = android.graphics.Color.DKGRAY }
+    var y = 60f
+    val incoming = records.filter { it.movement == "ورود" }.sumOf { it.totalWeight }
+    val outgoing = records.filter { it.movement == "خروج" }.sumOf { it.totalWeight }
+    page.canvas.drawText("Dairy Farm Manager - Inventory Report", 48f, y, paint)
+    y += 30f
+    page.canvas.drawText("Month: $month", 48f, y, paint)
+    y += 26f
+    page.canvas.drawText("Monthly total: in $incoming kg | out $outgoing kg | net ${incoming - outgoing} kg", 48f, y, paint)
+    y += 38f
+    page.canvas.drawText("Daily details", 48f, y, paint)
+    y += 26f
+    records.groupBy { it.date }.toSortedMap().forEach { (date, dayRecords) ->
+        if (y > 790f) return@forEach
+        val dayIn = dayRecords.filter { it.movement == "ورود" }.sumOf { it.totalWeight }
+        val dayOut = dayRecords.filter { it.movement == "خروج" }.sumOf { it.totalWeight }
+        page.canvas.drawText("$date: in $dayIn kg | out $dayOut kg", 64f, y, paint)
+        y += 22f
+    }
+    document.finishPage(page)
+    file.outputStream().use { document.writeTo(it) }
+    document.close()
+    Toast.makeText(context, "گزارش انبار در PDF ذخیره شد", Toast.LENGTH_LONG).show()
 }
 
 private fun saveMonthlyMilkPdf(
